@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#set -x
+set -x
 
 # Define log file path (can be overridden before sourcing)
 LOG_FILE=${LOG_FILE:-"/var/log/instance-bootstrap/oneshot.log"}
