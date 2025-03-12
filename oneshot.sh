@@ -94,7 +94,8 @@ init_systemd_oneshot() {
     fi
 
     echo_info "Defining $SERVICE_NAME service"
-    sudo cat <<EOF > "$SERVICE_FILE"
+
+sudo cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Instance Oneshot Configuration
 After=network.target
