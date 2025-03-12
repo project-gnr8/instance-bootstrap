@@ -23,7 +23,7 @@ init_log_file() {
     echo "[$( date +"%Y-%m-%dT%H:%M:%S%z" )] [INFO] Log initialized at $LOG_FILE" >> "$LOG_FILE"
 }
 
-echo_info() {
+echo() {
     local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
     # Format for console (with colors)
     local console_msg="\033[1;34m[INFO]\033[0m [$timestamp] $1"
@@ -40,23 +40,23 @@ wait_for_apt_lock() {
     local interval=5          # Interval between checks in seconds
     local elapsed=0
 
-    echo_info "Waiting for apt lock to be released..."
+    echo "Waiting for apt lock to be released..."
 
     while sudo fuser "$lock_file" >/dev/null 2>&1; do
         if [ "$elapsed" -ge "$lock_wait_time" ]; then
             echo -e "\033[1;31m[ERROR]\033[0m Timeout waiting for apt lock to be released."
             exit 1
         fi
-        echo_info "Apt lock is currently held by another process. Waiting..."
+        echo "Apt lock is currently held by another process. Waiting..."
         sleep "$interval"
         elapsed=$((elapsed + interval))
     done
 
-    echo_info "Apt lock is now free. Proceeding with package installation."
+    echo "Apt lock is now free. Proceeding with package installation."
 }
 
 disable_unattended_upgrades() {
-    echo_info "Disabling unattended-upgrades..."
+    echo "Disabling unattended-upgrades..."
     set +e # Disable exit on error -- want to try all
 	sudo systemctl stop unattended-upgrades
 	sudo pkill --signal SIGKILL unattended-upgrades
@@ -68,7 +68,7 @@ disable_unattended_upgrades() {
 }
 
 update_dns() {
-    echo_info "Updating DNS configuration..."
+    echo "Updating DNS configuration..."
     # Path to the systemd-resolved configuration
     RESOLVED_CONF="/etc/systemd/resolved.conf"
 
@@ -89,7 +89,7 @@ update_dns() {
     # Restart systemd-resolved to apply changes
     sudo systemctl restart systemd-resolved
 
-    echo_info "DNS servers have been updated to ${PRIMARY_DNS} (primary) and ${BACKUP_DNS} (backup)."
+    echo "DNS servers have been updated to ${PRIMARY_DNS} (primary) and ${BACKUP_DNS} (backup)."
 }
 
 install_metrics() {
@@ -98,10 +98,10 @@ install_metrics() {
 
 install_nvidia_driver() {
     if [ "$INST_DRIVER" = "disabled" ]; then
-        echo_info "NVIDIA driver installation is disabled. Skipping..."
+        echo "NVIDIA driver installation is disabled. Skipping..."
         return
     else
-        echo_info "Installing NVIDIA driver..."
+        echo "Installing NVIDIA driver..."
         desired_version=%s
         # Attempt to get the currently used NVIDIA driver version
         current_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null) || current_version=""
@@ -162,6 +162,27 @@ install_nvidia_driver() {
         sudo apt update
         sudo apt install nvidia-container-toolkit nvidia-container-toolkit-base -y --allow-change-held-packages
     fi
+
+    if command -v sudo docker &> /dev/null; then
+        echo "Docker is installed."
+        # Check if Docker is managed by systemd
+        if sudo systemctl list-units --full -all | grep -q 'docker.service'; then
+            echo "Docker is managed by systemd. Attempting to restart Docker service..."
+
+            # Restart Docker service
+            sudo systemctl restart docker.service
+
+            if [ $? -eq 0 ]; then
+                echo "Docker service restarted successfully."
+            else
+                echo "Failed to restart Docker service."
+            fi
+        else
+            echo "Docker is not managed by systemd or the docker.service does not exist."
+        fi
+    else
+        echo "Docker is not installed."
+    fi
 }
 
 install_docker {
@@ -193,10 +214,10 @@ install_docker {
         echo "Docker is already installed."
     fi
 
-    echo_info "Configuring Docker daemon MTU..."
+    echo "Configuring Docker daemon MTU..."
     HOST_MTU=$(ip -o link show $(ip route get 8.8.8.8 | grep -oP 'dev \K\w+') | grep -oP 'mtu \K\d+')
     if [ -n "$HOST_MTU" ]; then
-        echo_info "Host MTU detected: $HOST_MTU"
+        echo "Host MTU detected: $HOST_MTU"
         sudo mkdir -p /etc/docker
         if [ -s /etc/docker/daemon.json ]; then
             # If daemon.json exists, merge in the MTU setting
@@ -221,36 +242,36 @@ install_docker {
                 rm -f "$TEMP_FILE"
             else
                 # Invalid JSON, overwrite it
-                echo_info "Invalid JSON, overwriting /etc/docker/daemon.json"
-                echo_info "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
+                echo "Invalid JSON, overwriting /etc/docker/daemon.json"
+                echo "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
             fi
         else
             # If daemon.json doesn't exist, create it
-            echo_info "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
+            echo "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
         fi
         sudo systemctl restart docker
-        echo_info "Docker MTU configured to match host MTU"
+        echo "Docker MTU configured to match host MTU"
     else
-        echo_info "Could not detect host MTU, skipping Docker MTU configuration"
+        echo "Could not detect host MTU, skipping Docker MTU configuration"
     fi
 
-    echo_info "Configuring cdi"
+    echo "Configuring cdi"
     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml || echo "issue enabling CDI"
 
-    echo_info "Configuring NVIDIA runtime and restarting Docker..."
+    echo "Configuring NVIDIA runtime and restarting Docker..."
     if ! sudo nvidia-ctk runtime configure --runtime=docker --set-as-default; then
-        echo_info "Failed to configure NVIDIA runtime. Skipping Docker restart."
+        echo "Failed to configure NVIDIA runtime. Skipping Docker restart."
     else
         if ! sudo systemctl restart docker.service; then
-            echo_info "Failed to restart Docker service. Attempting to start it..."
+            echo "Failed to restart Docker service. Attempting to start it..."
             if ! sudo systemctl start docker.service; then
-                echo_info "Failed to start Docker service. Please check your Docker installation."
+                echo "Failed to start Docker service. Please check your Docker installation."
             fi
         fi
-        echo_info "NVIDIA runtime configured and Docker service restarted successfully."
+        echo "NVIDIA runtime configured and Docker service restarted successfully."
     fi
 
-    echo_info "Setting NVIDIA CTK default mode to 'cdi'..."
+    echo "Setting NVIDIA CTK default mode to 'cdi'..."
     sudo nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi || echo "Failed to set NVIDIA CTK default mode to 'cdi'."
 
     # Establish service for cdi refresh
@@ -273,32 +294,32 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-cdi-refresh.service
-    echo_info "nvidia-cdi-refresh service configured."
+    echo "nvidia-cdi-refresh service configured."
     else
-    echo_info "nvidia-cdi-refresh service already exists."
+    echo "nvidia-cdi-refresh service already exists."
     fi
 
     # Verify Docker is running
     if ! docker info &>/dev/null; then
-        echo_info "Docker is not running. Please check your Docker installation."
+        echo "Docker is not running. Please check your Docker installation."
     else
-        echo_info "Docker is running correctly."
+        echo "Docker is running correctly."
         docker --version
     fi
 
     # add user to docker group
-    echo_info "Adding user $INST_USER to docker group..."
+    echo "Adding user $INST_USER to docker group..."
     sudo usermod -aG docker $INST_USER
 }
 
 init_ephemeral_dir {
-    echo_info "Creating ephemeral directory..."
+    echo "Creating ephemeral directory..."
     sudo mkdir -p /ephemeral
     sudo chmod  777 /ephemeral
 }
 
 init_workbench_install() {
-    echo_info "Creating workbench install directory..."
+    echo "Creating workbench install directory..."
     mkdir -p $HOME/.nvwb/bin && \
     cat > $HOME/.nvwb/install.sh << 'EOF'
 #!/bin/bash
@@ -348,7 +369,7 @@ wait_docker
 ########### Ansible Setup ###########
 
 # # Update package lists and install prerequisites
-# echo_info "Updating package lists and installing prerequisites..."
+# echo "Updating package lists and installing prerequisites..."
 
 # # Wait for any existing apt processes to finish
 # wait_for_apt_lock
@@ -362,22 +383,22 @@ wait_docker
 
 # # Create virtual environment if it doesn't exist
 # if [ ! -d "$VENV_DIR" ]; then
-#     echo_info "Creating Python virtual environment at $VENV_DIR..."
+#     echo "Creating Python virtual environment at $VENV_DIR..."
 #     python3 -m venv $VENV_DIR
 # else
-#     echo_info "Python virtual environment already exists at $VENV_DIR."
+#     echo "Python virtual environment already exists at $VENV_DIR."
 # fi
 
 # # Activate the virtual environment
-# echo_info "Activating the virtual environment..."
+# echo "Activating the virtual environment..."
 # source "$VENV_DIR/bin/activate"
 
 # # Upgrade pip within the virtual environment
-# echo_info "Upgrading pip..."
+# echo "Upgrading pip..."
 # pip install --upgrade pip
 
 # # Install Ansible within the virtual environment
-# echo_info "Installing Ansible in the virtual environment..."
+# echo "Installing Ansible in the virtual environment..."
 # pip install ansible
 
 # # Clone the Ansible repository
@@ -385,10 +406,10 @@ wait_docker
 # CLONE_DIR="/tmp/instance-bootstrap"
 
 # if [ ! -d "$CLONE_DIR" ]; then
-#     echo_info "Cloning repository from $REPO_URL to $CLONE_DIR..."
+#     echo "Cloning repository from $REPO_URL to $CLONE_DIR..."
 #     git clone "$REPO_URL" "$CLONE_DIR"
 # else
-#     echo_info "Repository already cloned at $CLONE_DIR."
+#     echo "Repository already cloned at $CLONE_DIR."
 # fi
 
 # cd "$CLONE_DIR"
@@ -398,13 +419,13 @@ wait_docker
 # LOG_FILE="$LOG_DIR/ansible-playbook.log"
 
 # # Create the log directory with appropriate permissions
-# echo_info "Setting up log directory at $LOG_DIR..."
+# echo "Setting up log directory at $LOG_DIR..."
 # sudo mkdir -p "$LOG_DIR"
 # sudo chmod 775 "$LOG_DIR"
 # sudo chown "$USER":"$USER" "$LOG_DIR"
 
 # # Create the log file with appropriate permissions
-# echo_info "Creating log file at $LOG_FILE..."
+# echo "Creating log file at $LOG_FILE..."
 # sudo touch "$LOG_FILE"
 # sudo chmod 664 "$LOG_FILE"
 # sudo chown "$USER":"$USER" "$LOG_FILE"
@@ -415,11 +436,11 @@ wait_docker
 # EXTRA_VARS="$@"
 
 # # Run the Ansible playbook with logging and extra-vars
-# echo_info "Running the Ansible playbook..."
+# echo "Running the Ansible playbook..."
 # ANSIBLE_LOG_PATH="$LOG_FILE" "$VENV_DIR/bin/ansible-playbook" -c local -i 'localhost,' -b playbook.yml --extra-vars "$EXTRA_VARS"
 
 # # Deactivate the virtual environment
-# echo_info "Deactivating the virtual environment..."
+# echo "Deactivating the virtual environment..."
 # deactivate
 
-# echo_info "Ansible playbook execution completed successfully."
+# echo "Ansible playbook execution completed successfully."
