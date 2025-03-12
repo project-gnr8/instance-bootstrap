@@ -1,0 +1,11 @@
+---
+- name: Configure Instance
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    domain: "domain.com"
+  tasks:
+    - name: Debug test
+      debug:
+        msg: "Debug test"
