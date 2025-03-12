@@ -95,21 +95,23 @@ init_systemd_oneshot() {
 
     echo_info "Defining $SERVICE_NAME service"
 
-sudo cat <<EOF > "$SERVICE_FILE"
-[Unit]
+    # Create service file content
+    local service_content="[Unit]
 Description=Instance Oneshot Configuration
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/startup.sh $INST_USER $INST_DRIVER "$INST_METRICS_VARS"
+ExecStart=/opt/startup.sh $INST_USER $INST_DRIVER \"$INST_METRICS_VARS\"
 StandardOutput=journal
 StandardError=journal
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=multi-user.target"
+
+    # Write service file using sudo tee instead of redirection
+    echo "$service_content" | sudo tee "$SERVICE_FILE" > /dev/null
 
     echo_info "Downloading $STARTUP_SCRIPT_URL"
     sudo curl -sSL "$STARTUP_SCRIPT_URL" -o /opt/startup.sh
