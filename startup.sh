@@ -339,9 +339,14 @@ update_dns
 disable_unattended_upgrades
 install_nvidia_driver
 install_docker
+install_metrics
 init_ephemeral_dir
 init_workbench_install
 wait_docker
+
+
+########### Ansible Setup ###########
+
 # Update package lists and install prerequisites
 echo_info "Updating package lists and installing prerequisites..."
 
@@ -418,6 +423,3 @@ echo_info "Deactivating the virtual environment..."
 deactivate
 
 echo_info "Ansible playbook execution completed successfully."
-
-# Sample call:
-# curl -sSL https://github.com/project-gnr8/instance-bootstrap/main/startup.sh | bash -s -- var1='' var2='' var3='' var4=''
