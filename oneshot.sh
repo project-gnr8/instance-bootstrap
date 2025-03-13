@@ -114,8 +114,8 @@ EnvironmentFile=${env_file}
 ExecStart=/opt/startup.sh \${INST_USER} \${INST_DRIVER} \"\${INST_METRICS_VARS}\"
 StandardOutput=journal
 StandardError=journal
-# Set KillMode to process-group to ensure all child processes are terminated
-KillMode=process-group
+# Kill all processes in the control group to ensure cleanup
+KillMode=control-group
 # Set TimeoutStopSec to a higher value to allow proper cleanup
 TimeoutStopSec=180s
 RemainAfterExit=yes
