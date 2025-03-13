@@ -321,40 +321,36 @@ init_ephemeral_dir() {
 }
 
 init_workbench_install() {
-    echo "Creating workbench install directory..."
-    mkdir -p $HOME/.nvwb/bin && \
-    cat > $HOME/.nvwb/install.sh << 'EOF'
+    echo "Setting up workbench installation for user $INST_USER..."
+    
+    # Get the home directory for INST_USER
+    local user_home=$(eval echo ~$INST_USER)
+    echo "User home directory: $user_home"
+    
+    # Create necessary directories
+    sudo -u $INST_USER mkdir -p $user_home/.nvwb/bin
+    
+    # Create the install script with proper ownership
+    sudo -u $INST_USER tee $user_home/.nvwb/install.sh > /dev/null << 'EOF'
 #!/bin/bash
+# Redirect all output to log file
 exec >> $HOME/.nvwb/install.log 2>&1
-echo "Starting NVIDIA AI Workbench installation..."
-curl -L https://workbench.download.nvidia.com/stable/workbench-cli/$(curl -L -s https://workbench.download.nvidia.com/stable/workbench-cli/LATEST)/nvwb-cli-$(uname)-$(uname -m) --output $HOME/.nvwb/bin/nvwb-cli
-chmod +x $HOME/.nvwb/bin/nvwb-cli
-sudo -E $HOME/.nvwb/bin/nvwb-cli install --uid 1000 --gid 1000 --accept --noninteractive --drivers --docker -o json
-echo "NVIDIA AI Workbench installation completed successfully"
-EOF
-    chmod +x $HOME/.nvwb/install.sh
-    
-    # Create a separate systemd service for workbench installation instead of using nohup
-    echo "Creating systemd service for workbench installation..."
-    sudo tee /etc/systemd/system/workbench-install.service > /dev/null << EOF
-[Unit]
-Description=NVIDIA AI Workbench Installation
-After=network.target
 
-[Service]
-Type=oneshot
-ExecStart=$HOME/.nvwb/install.sh
-User=$INST_USER
-RemainAfterExit=yes
+# Download and install NVIDIA Workbench CLI
+curl -fsSL https://developer.nvidia.com/workbench/cli/install | bash
 
-[Install]
-WantedBy=multi-user.target
+# Exit with success
+exit 0
 EOF
     
-    # Enable and start the service
-    sudo systemctl daemon-reload
-    sudo systemctl enable workbench-install.service
-    echo "Workbench installation service created and enabled. It will run independently of this script."
+    # Set proper permissions
+    sudo chmod +x $user_home/.nvwb/install.sh
+    
+    # Run the installation script in the background as the correct user
+    echo "Starting workbench installation in the background..."
+    sudo -u $INST_USER bash -c "nohup $user_home/.nvwb/install.sh > $user_home/.nvwb/nohup.out 2>&1 &"
+    
+    echo "Workbench installation initiated. Check $user_home/.nvwb/install.log for progress."
 }
 
 wait_docker() {
