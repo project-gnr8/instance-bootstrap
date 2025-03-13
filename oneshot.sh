@@ -56,8 +56,8 @@ is_service_configured() {
 is_startup_script_installed() {
     # Check if startup script exists and is executable
     if [ -f "/opt/startup.sh" ] && [ -x "/opt/startup.sh" ]; then
-        echo_info "Startup script already installed at /opt/startup.sh"
-        return 0
+        echo_info "Startup script already installed at /opt/startup.sh but refreshing."
+        return 1
     fi
     return 1
 }
