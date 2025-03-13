@@ -1,6 +1,12 @@
 # instance-bootstrap
 
 
+## Bootstrapping Example
+
+```bash
+curl -sSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/oneshot.sh | bash -s -- ubuntu 535 "aws_timestream_access_key='test_key' aws_timestream_secret_key='test_secret' aws_timestream_database='test_db' aws_timestream_region='test_region' environmentID='test_envid'"
+```
+
 ## Resource Cleanup
 
 ```bash
@@ -15,6 +21,7 @@ sudo rm -f /etc/systemd/system/workbench-install.service
 # Remove installed scripts
 sudo rm -f /opt/startup.sh
 sudo rm -f $HOME/.nvwb/install.sh
+sudo rm -rf $HOME/.nvwb/*
 
 # Clear journal logs
 sudo journalctl --rotate
