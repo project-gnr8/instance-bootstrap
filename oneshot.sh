@@ -60,13 +60,30 @@ echo_error() {
 
 # Check if service is already running or has completed
 check_service_status() {
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo_info "Service $SERVICE_NAME is already running"
+    # Get detailed status information without hanging
+    local is_active=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
+    local is_enabled=$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || echo "disabled")
+    local is_failed=$(systemctl is-failed "$SERVICE_NAME" 2>/dev/null || echo "failed")
+    local active_state=$(systemctl show -p ActiveState --value "$SERVICE_NAME" 2>/dev/null || echo "unknown")
+    local sub_state=$(systemctl show -p SubState --value "$SERVICE_NAME" 2>/dev/null || echo "unknown")
+    
+    echo_info "Service state: $is_active (${active_state}/${sub_state})"
+    
+    if [ "$is_active" = "active" ] && [ "$sub_state" = "running" ]; then
+        # Only consider it running if it's actually in running state
+        echo_info "Service $SERVICE_NAME is currently running"
         return 0
-    elif systemctl is-enabled --quiet "$SERVICE_NAME" && ! systemctl is-failed --quiet "$SERVICE_NAME"; then
+    elif [ "$is_active" = "active" ] && [ "$sub_state" = "exited" ]; then
+        # Handle the "active (exited)" state for oneshot services
         echo_info "Service $SERVICE_NAME has already completed successfully"
         return 0
+    elif [ "$is_enabled" = "enabled" ] && [ "$is_failed" != "failed" ]; then
+        # Service is enabled but not active - could be waiting to start
+        echo_info "Service $SERVICE_NAME is configured but not currently active"
+        return 0
     fi
+    
+    # Service needs to be configured
     return 1
 }
 
@@ -185,8 +202,12 @@ main() {
     
     # Check if service already exists and is running/completed
     if check_service_status; then
-        echo_info "Service already configured, showing status"
-        sudo systemctl status "$SERVICE_NAME"
+        echo_info "Service already configured, showing status summary"
+        # Use systemctl show instead of status to avoid hanging
+        echo_info "Service status details:"
+        systemctl show "$SERVICE_NAME" -p LoadState,ActiveState,SubState,UnitFileState,Result
+        echo_info "Instance bootstrap oneshot script completed - service already configured"
+        exit 0
     else
         # Stop and disable service if it exists but failed
         if systemctl list-unit-files "$SERVICE_NAME.service" | grep -q "$SERVICE_NAME"; then
