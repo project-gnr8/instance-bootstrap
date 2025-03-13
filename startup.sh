@@ -21,8 +21,8 @@ init_log_file() {
     # Then create/touch the log file
     sudo touch "$LOG_FILE" 2>/dev/null
     sudo chmod 775 "$log_dir"
-    sudo chown "$USER":"$USER" "$log_dir"
-    sudo chown "$USER":"$USER" "$LOG_FILE"
+    sudo chown "$INST_USER":"$INST_USER" "$log_dir"
+    sudo chown "$INST_USER":"$INST_USER" "$LOG_FILE"
     echo "[$( date +"%Y-%m-%dT%H:%M:%S%z" )] [INFO] Log initialized at $LOG_FILE" >> "$LOG_FILE"
 }
 
