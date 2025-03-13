@@ -124,14 +124,45 @@ stream_logs() {
     sudo journalctl -f -u "$SERVICE_NAME" --no-pager &
     JOURNAL_PID=$!
     
-    # Wait for service to complete or fail
-    while systemctl is-active --quiet "$SERVICE_NAME"; do
-        sleep 2
+    # Wait for service to complete or fail with timeout
+    local timeout=600  # 10 minutes timeout
+    local elapsed=0
+    local check_interval=5
+    
+    echo_info "Monitoring service status (timeout: ${timeout}s)..."
+    while [ $elapsed -lt $timeout ]; do
+        # Check if service is still active
+        if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+            echo_info "Service is no longer active, checking final status"
+            break
+        fi
+        
+        # Check if service is still running but in a different state
+        local status=$(systemctl show -p ActiveState --value "$SERVICE_NAME")
+        if [ "$status" != "active" ]; then
+            echo_info "Service state changed to: $status"
+            break
+        fi
+        
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+        
+        # Show progress every minute
+        if [ $((elapsed % 60)) -eq 0 ]; then
+            echo_info "Still waiting for service to complete... (${elapsed}s elapsed)"
+        fi
     done
     
     # Kill the journalctl process
     kill $JOURNAL_PID 2>/dev/null
     wait $JOURNAL_PID 2>/dev/null
+    
+    # Check if we timed out
+    if [ $elapsed -ge $timeout ]; then
+        echo_error "Monitoring timed out after ${timeout}s. Service may still be running."
+        echo_info "You can check status manually with: sudo systemctl status $SERVICE_NAME"
+        return
+    fi
     
     # Check final status
     if systemctl is-failed --quiet "$SERVICE_NAME"; then
