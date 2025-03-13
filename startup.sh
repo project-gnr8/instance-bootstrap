@@ -185,7 +185,10 @@ install_nvidia_driver() {
             if [ $? -eq 0 ]; then
                 echo "Docker service restarted successfully."
             else
-                echo "Failed to restart Docker service."
+                echo "Failed to restart Docker service. Attempting a stop & start"
+                sudo systemctl stop docker.service
+                sleep 3
+                sudo systemctl start docker.service
             fi
         else
             echo "Docker is not managed by systemd or the docker.service does not exist."
@@ -276,6 +279,11 @@ install_docker() {
             echo "Failed to restart Docker service. Attempting to start it..."
             if ! sudo systemctl start docker.service; then
                 echo "Failed to start Docker service. Please check your Docker installation."
+            else
+                echo "Failed to restart Docker service. Attempting a stop & start"
+                sudo systemctl stop docker.service
+                sleep 3
+                sudo systemctl start docker.service 
             fi
         fi
         echo "NVIDIA runtime configured and Docker service restarted successfully."
