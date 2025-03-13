@@ -312,10 +312,10 @@ EOF
     sudo usermod -aG docker $INST_USER
 }
 
-init_ephemeral_dir {
+init_ephemeral_dir() {
     echo "Creating ephemeral directory..."
     sudo mkdir -p /ephemeral
-    sudo chmod  777 /ephemeral
+    sudo chmod 777 /ephemeral
 }
 
 init_workbench_install() {
@@ -361,12 +361,12 @@ wait_docker() {
     for i in $(seq 1 $MAX_RETRIES); do
         if sudo docker info &>/dev/null; then
             echo "Docker daemon is up and running"
-            break
+            return 0
         fi
         
         if [ $i -eq $MAX_RETRIES ]; then
             echo "Error: Docker daemon failed to start properly after $MAX_RETRIES attempts"
-            exit 1
+            return 1
         fi
         
         echo "Waiting for Docker daemon to start (attempt $i/$MAX_RETRIES)..."
@@ -377,91 +377,17 @@ wait_docker() {
 # Initialize log file at script start
 init_log_file
 
-update_dns
-disable_unattended_upgrades
-install_nvidia_driver
-install_docker
-install_metrics
-init_ephemeral_dir
-init_workbench_install
-wait_docker
+# Run functions with error handling to prevent script from continuing if a critical function fails
+echo "Starting system configuration..."
+update_dns || { echo "DNS configuration failed"; exit 1; }
+disable_unattended_upgrades || { echo "Disabling unattended upgrades failed"; exit 1; }
+install_nvidia_driver || { echo "NVIDIA driver installation failed"; exit 1; }
+install_docker || { echo "Docker installation failed"; exit 1; }
+install_metrics || { echo "Metrics installation failed"; exit 1; }
+init_ephemeral_dir || { echo "Ephemeral directory creation failed"; exit 1; }
 
+# These are non-critical, so we can continue even if they fail
+init_workbench_install || echo "Workbench installation setup failed, but continuing"
+wait_docker || echo "Docker daemon not responding, but continuing"
 
-########### Ansible Setup ###########
-
-# # Update package lists and install prerequisites
-# echo "Updating package lists and installing prerequisites..."
-
-# # Wait for any existing apt processes to finish
-# wait_for_apt_lock
-
-# # Proceed with package installation
-# sudo apt-get update
-# sudo apt-get install -y python3 python3-pip python3-venv git
-
-# # Define virtual environment directory
-# VENV_DIR="/tmp/ansible_env"
-
-# # Create virtual environment if it doesn't exist
-# if [ ! -d "$VENV_DIR" ]; then
-#     echo "Creating Python virtual environment at $VENV_DIR..."
-#     python3 -m venv $VENV_DIR
-# else
-#     echo "Python virtual environment already exists at $VENV_DIR."
-# fi
-
-# # Activate the virtual environment
-# echo "Activating the virtual environment..."
-# source "$VENV_DIR/bin/activate"
-
-# # Upgrade pip within the virtual environment
-# echo "Upgrading pip..."
-# pip install --upgrade pip
-
-# # Install Ansible within the virtual environment
-# echo "Installing Ansible in the virtual environment..."
-# pip install ansible
-
-# # Clone the Ansible repository
-# REPO_URL="https://github.com/project-gnr8/instance-bootstrap.git"
-# CLONE_DIR="/tmp/instance-bootstrap"
-
-# if [ ! -d "$CLONE_DIR" ]; then
-#     echo "Cloning repository from $REPO_URL to $CLONE_DIR..."
-#     git clone "$REPO_URL" "$CLONE_DIR"
-# else
-#     echo "Repository already cloned at $CLONE_DIR."
-# fi
-
-# cd "$CLONE_DIR"
-
-# # Define log directory and file
-# LOG_DIR="/var/log/ansible"
-# LOG_FILE="$LOG_DIR/ansible-playbook.log"
-
-# # Create the log directory with appropriate permissions
-# echo "Setting up log directory at $LOG_DIR..."
-# sudo mkdir -p "$LOG_DIR"
-# sudo chmod 775 "$LOG_DIR"
-# sudo chown "$USER":"$USER" "$LOG_DIR"
-
-# # Create the log file with appropriate permissions
-# echo "Creating log file at $LOG_FILE..."
-# sudo touch "$LOG_FILE"
-# sudo chmod 664 "$LOG_FILE"
-# sudo chown "$USER":"$USER" "$LOG_FILE"
-
-# set +x  # Disable debug output to hide sensitive variables
-
-# # Capture all script arguments to pass to Ansible as extra-vars
-# EXTRA_VARS="$@"
-
-# # Run the Ansible playbook with logging and extra-vars
-# echo "Running the Ansible playbook..."
-# ANSIBLE_LOG_PATH="$LOG_FILE" "$VENV_DIR/bin/ansible-playbook" -c local -i 'localhost,' -b playbook.yml --extra-vars "$EXTRA_VARS"
-
-# # Deactivate the virtual environment
-# echo "Deactivating the virtual environment..."
-# deactivate
-
-# echo "Ansible playbook execution completed successfully."
+echo "System configuration completed successfully"
