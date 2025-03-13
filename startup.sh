@@ -95,7 +95,20 @@ update_dns() {
 }
 
 install_metrics() {
-    curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | bash -s -- $INST_METRICS_VARS
+    echo "Setting up metrics with variables: $INST_METRICS_VARS"
+    
+    # Parse the metrics variables string into an array
+    # This handles both space-separated key=value pairs and quoted values
+    local metrics_array=()
+    
+    # Read the string into an array, respecting quoted values
+    eval "metrics_array=($INST_METRICS_VARS)"
+    
+    # Pass each parameter individually to the setup script
+    curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | \
+        bash -s -- "${metrics_array[@]}"
+    
+    echo "Metrics setup completed"
 }
 
 install_nvidia_driver() {
@@ -327,30 +340,24 @@ init_workbench_install() {
     local user_home=$(eval echo ~$INST_USER)
     echo "User home directory: $user_home"
     
-    # Create necessary directories
+    # Create the directory structure
     sudo -u $INST_USER mkdir -p $user_home/.nvwb/bin
     
-    # Create the install script with proper ownership
-    sudo -u $INST_USER tee $user_home/.nvwb/install.sh > /dev/null << 'EOF'
+    # Create the install script with heredoc that preserves variable expansion
+    sudo -u $INST_USER bash -c "cat > $user_home/.nvwb/install.sh << 'EOFMARKER'
 #!/bin/bash
-# Redirect all output to log file
-exec >> $HOME/.nvwb/install.log 2>&1
-
-# Download and install NVIDIA Workbench CLI
-curl -fsSL https://developer.nvidia.com/workbench/cli/install | bash
-
-# Exit with success
-exit 0
-EOF
+exec >> \$HOME/.nvwb/install.log 2>&1
+echo \"Starting NVIDIA AI Workbench installation...\"
+curl -L https://workbench.download.nvidia.com/stable/workbench-cli/\$(curl -L -s https://workbench.download.nvidia.com/stable/workbench-cli/LATEST)/nvwb-cli-\$(uname)-\$(uname -m) --output \$HOME/.nvwb/bin/nvwb-cli
+chmod +x \$HOME/.nvwb/bin/nvwb-cli
+sudo -E \$HOME/.nvwb/bin/nvwb-cli install --uid 1000 --gid 1000 --accept --noninteractive --drivers --docker -o json
+echo \"NVIDIA AI Workbench installation completed successfully\"
+EOFMARKER"
     
-    # Set proper permissions
-    sudo chmod +x $user_home/.nvwb/install.sh
+    # Set proper permissions and run in background exactly like original
+    sudo -u $INST_USER bash -c "chmod +x $user_home/.nvwb/install.sh && (nohup $user_home/.nvwb/install.sh > /dev/null 2>&1 &)"
     
-    # Run the installation script in the background as the correct user
-    echo "Starting workbench installation in the background..."
-    sudo -u $INST_USER bash -c "nohup $user_home/.nvwb/install.sh > $user_home/.nvwb/nohup.out 2>&1 &"
-    
-    echo "Workbench installation initiated. Check $user_home/.nvwb/install.log for progress."
+    echo "Workbench installation initiated in the background."
 }
 
 wait_docker() {
