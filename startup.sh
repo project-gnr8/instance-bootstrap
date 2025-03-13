@@ -30,7 +30,7 @@ echo() {
     # Format for log file (without colors)
     local log_msg="[$timestamp] [INFO] $1"
     # Output to console and log file using tee
-    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE") >/dev/null
+    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE")
 }
 
 # Function to wait for apt lock to be free
@@ -330,8 +330,29 @@ chmod +x $HOME/.nvwb/bin/nvwb-cli
 sudo -E $HOME/.nvwb/bin/nvwb-cli install --uid 1000 --gid 1000 --accept --noninteractive --drivers --docker -o json
 echo "NVIDIA AI Workbench installation completed successfully"
 EOF
-    chmod +x $HOME/.nvwb/install.sh && \
-    (nohup $HOME/.nvwb/install.sh > /dev/null 2>&1 &)
+    chmod +x $HOME/.nvwb/install.sh
+    
+    # Create a separate systemd service for workbench installation instead of using nohup
+    echo "Creating systemd service for workbench installation..."
+    sudo tee /etc/systemd/system/workbench-install.service > /dev/null << EOF
+[Unit]
+Description=NVIDIA AI Workbench Installation
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=$HOME/.nvwb/install.sh
+User=$INST_USER
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Enable and start the service
+    sudo systemctl daemon-reload
+    sudo systemctl enable workbench-install.service
+    echo "Workbench installation service created and enabled. It will run independently of this script."
 }
 
 wait_docker() {

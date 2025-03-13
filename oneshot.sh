@@ -41,7 +41,7 @@ echo_info() {
     # Format for log file (without colors)
     local log_msg="[$timestamp] [INFO] $1"
     # Output to console and log file using tee
-    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE") >/dev/null
+    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE")
 }
 
 is_service_configured() {
@@ -105,6 +105,10 @@ Type=oneshot
 ExecStart=/opt/startup.sh $INST_USER $INST_DRIVER \"$INST_METRICS_VARS\"
 StandardOutput=journal
 StandardError=journal
+# Set KillMode to process-group to ensure all child processes are terminated
+KillMode=process-group
+# Set TimeoutStopSec to a higher value to allow proper cleanup
+TimeoutStopSec=180s
 RemainAfterExit=yes
 
 [Install]
