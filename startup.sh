@@ -185,7 +185,7 @@ install_nvidia_driver() {
     fi
 }
 
-install_docker {
+install_docker() {
     if ! type docker &> /dev/null; then
         echo "Installing Docker..."
         # https://docs.docker.com/engine/install/ubuntu/
