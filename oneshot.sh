@@ -1,209 +1,220 @@
 #!/bin/bash
 
-set -x
+# Strict mode to catch errors early
+set -euo pipefail
 
-# Define log file path (can be overridden before sourcing)
+# Define log file path and key variables
 LOG_FILE=${LOG_FILE:-"/var/log/instance-bootstrap/oneshot.log"}
 STARTUP_SCRIPT_URL=${STARTUP_SCRIPT_URL:-"https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/startup.sh"}
 SERVICE_NAME="instance-oneshot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+ENV_FILE="/etc/systemd/${SERVICE_NAME}.env"
 
-INST_USER=$1
-INST_DRIVER=$2
-INST_METRICS_VARS="aws_timestream_access_key='$3' aws_timestream_secret_key='$4' aws_timestream_database='$5' aws_timestream_region='$6' environmentID='$7'"
+# Parse command line arguments
+INST_USER=${1:-"ubuntu"}
+INST_DRIVER=${2:-"535"}
+INST_METRICS_VARS="${3:-""}"
 
 # Function to initialize log file and directory
 init_log_file() {
-    # Create log directory first
     local log_dir=$(dirname "$LOG_FILE")
     
-    # Check if log directory exists before creating
+    # Create log directory if it doesn't exist
     if [ ! -d "$log_dir" ]; then
-        echo "Creating log directory: $log_dir"
         sudo mkdir -p "$log_dir" 2>/dev/null
         sudo chmod 775 "$log_dir"
         sudo chown "$USER":"$USER" "$log_dir"
     fi
     
-    # Then create/touch the log file if it doesn't exist
+    # Create log file if it doesn't exist
     if [ ! -f "$LOG_FILE" ]; then
-        echo "Creating log file: $LOG_FILE"
         sudo touch "$LOG_FILE" 2>/dev/null
         sudo chown "$USER":"$USER" "$LOG_FILE"
-        echo "[$( date +"%Y-%m-%dT%H:%M:%S%z" )] [INFO] Log initialized at $LOG_FILE" >> "$LOG_FILE"
     fi
-}
-
-echo_info() {
-    local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
-    # Format for console (with colors)
-    local console_msg="\033[1;34m[INFO]\033[0m [$timestamp] $1"
-    # Format for log file (without colors)
-    local log_msg="[$timestamp] [INFO] $1"
-    # Output to console and log file using tee
-    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE")
-}
-
-is_service_configured() {
-    # Check if service file exists and has correct content
-    if [ -f "$SERVICE_FILE" ]; then
-        echo_info "Service file already exists: $SERVICE_FILE"
-        return 0
-    fi
-    return 1
-}
-
-is_startup_script_installed() {
-    # Check if startup script exists and is executable
-    if [ -f "/opt/startup.sh" ] && [ -x "/opt/startup.sh" ]; then
-        echo_info "Startup script already installed at /opt/startup.sh but refreshing."
-        return 1
-    fi
-    return 1
-}
-
-is_service_enabled() {
-    # Check if service is enabled
-    if sudo systemctl is-enabled "$SERVICE_NAME" &>/dev/null; then
-        echo_info "Service $SERVICE_NAME is already enabled"
-        return 0
-    fi
-    return 1
-}
-
-is_service_active_or_done() {
-    # Check if service is active or has completed successfully
-    local status=$(sudo systemctl is-active "$SERVICE_NAME" 2>/dev/null)
-    local failed=$(sudo systemctl is-failed "$SERVICE_NAME" 2>/dev/null)
     
-    if [ "$status" = "active" ] || [ "$failed" = "active" ]; then
-        echo_info "Service $SERVICE_NAME is already running"
-        return 0
-    elif [ "$status" = "inactive" ] && [ "$failed" != "failed" ]; then
-        echo_info "Service $SERVICE_NAME has already completed successfully"
-        return 0
-    fi
-    return 1
+    echo "[$( date +"%Y-%m-%dT%H:%M:%S%z" )] [INFO] Log initialized at $LOG_FILE" >> "$LOG_FILE"
 }
 
-init_systemd_oneshot() {
-    # Check if service is already properly configured and running
-    if is_service_configured && is_startup_script_installed && is_service_enabled && is_service_active_or_done; then
-        echo_info "Service $SERVICE_NAME is already properly configured and running/completed"
+# Enhanced logging function
+log() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
+    
+    # Format for console with colors
+    local color=""
+    case "$level" in
+        "INFO") color="\033[1;34m" ;;
+        "ERROR") color="\033[1;31m" ;;
+        "SUCCESS") color="\033[1;32m" ;;
+        *) color="\033[1;34m" ;;
+    esac
+    
+    # Output to console and log file
+    printf "${color}[%s]\033[0m [%s] %s\n" "$level" "$timestamp" "$message" >&1
+    printf "[%s] [%s] %s\n" "$timestamp" "$level" "$message" >> "$LOG_FILE"
+}
+
+# Check if service is already running or has completed
+check_service_state() {
+    # Get current status
+    local is_active=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
+    local is_enabled=$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || echo "disabled")
+    local is_failed=$(systemctl is-failed "$SERVICE_NAME" 2>/dev/null || echo "no")
+    
+    # Return status code based on service state
+    if [ "$is_active" = "active" ]; then
+        # Service is currently running
+        return 1
+    elif [ "$is_active" = "inactive" ] && [ "$is_enabled" = "enabled" ] && [ "$is_failed" != "failed" ]; then
+        # Service has completed successfully
         return 0
+    else
+        # Service needs setup
+        return 2
     fi
+}
 
-    echo_info "Defining $SERVICE_NAME service"
+# Clean up any existing service artifacts to ensure clean state
+cleanup_service() {
+    log "INFO" "Cleaning up existing service artifacts"
+    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    sudo rm -f "$SERVICE_FILE" "$ENV_FILE" 2>/dev/null || true
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
+}
 
-    # Create env file for sensitive variables
-    local env_file="/etc/systemd/$SERVICE_NAME.env"
-    echo "Creating environment file for sensitive variables"
-    echo "INST_USER=${INST_USER}" | sudo tee "$env_file" > /dev/null
-    echo "INST_DRIVER=${INST_DRIVER}" | sudo tee -a "$env_file" > /dev/null
-    echo "INST_METRICS_VARS=${INST_METRICS_VARS}" | sudo tee -a "$env_file" > /dev/null
-    sudo chmod 600 "$env_file"
-
-    # Create service file content
-    local service_content="[Unit]
+# Configure and start the systemd service
+setup_service() {
+    log "INFO" "Setting up $SERVICE_NAME service"
+    
+    # Create environment file with sensitive variables
+    log "INFO" "Creating environment file for service variables"
+    sudo tee "$ENV_FILE" > /dev/null << EOF
+INST_USER=${INST_USER}
+INST_DRIVER=${INST_DRIVER}
+INST_METRICS_VARS=${INST_METRICS_VARS}
+EOF
+    sudo chmod 600 "$ENV_FILE"
+    
+    # Download the startup script
+    log "INFO" "Downloading startup script from $STARTUP_SCRIPT_URL"
+    sudo curl -sSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+        "$STARTUP_SCRIPT_URL?$(date +%s)" -o /opt/startup.sh
+    sudo chmod 755 /opt/startup.sh
+    
+    # Create service file
+    log "INFO" "Creating systemd service file"
+    sudo tee "$SERVICE_FILE" > /dev/null << EOF
+[Unit]
 Description=Instance Oneshot Configuration
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=${env_file}
-ExecStart=/opt/startup.sh \${INST_USER} \${INST_DRIVER} \"\${INST_METRICS_VARS}\"
+EnvironmentFile=${ENV_FILE}
+ExecStart=/opt/startup.sh \${INST_USER} \${INST_DRIVER} "\${INST_METRICS_VARS}"
 StandardOutput=journal
 StandardError=journal
-# Kill all processes in the control group to ensure cleanup
 KillMode=process
-# Set TimeoutStopSec to a higher value to allow proper cleanup
+TimeoutStartSec=0
 TimeoutStopSec=180s
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target"
-
-
-    # Write service file using sudo tee instead of redirection
-    echo "$service_content" | sudo tee "$SERVICE_FILE" > /dev/null
-
-    echo_info "Downloading $STARTUP_SCRIPT_URL"
-    sudo curl -sSL -H 'Cache-Control: no-cache' "$STARTUP_SCRIPT_URL" -o /opt/startup.sh
-    sudo chmod a+x /opt/startup.sh
+WantedBy=multi-user.target
+EOF
     sudo chmod 644 "$SERVICE_FILE"
+    
+    # Reload systemd, enable and start the service
+    log "INFO" "Reloading systemd configuration"
     sudo systemctl daemon-reload
     
-    if ! is_service_enabled; then
-        echo_info "Enabling $SERVICE_NAME service"
-        sudo systemctl enable "$SERVICE_NAME"
-    fi
-
-    if ! is_service_active_or_done; then
-        echo_info "Starting $SERVICE_NAME service"
-        sudo systemctl start "$SERVICE_NAME"
-    fi
+    log "INFO" "Enabling and starting $SERVICE_NAME service"
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl start "$SERVICE_NAME"
 }
 
-stream_service_logs_until_complete() {
-    echo_info "Streaming logs from $SERVICE_NAME service until completion..."
+# Stream service logs with proper termination
+stream_logs() {
+    log "INFO" "Streaming service logs (press Ctrl+C to stop)..."
     
-    # Check if service is already completed
-    local status=$(sudo systemctl is-active "$SERVICE_NAME" 2>/dev/null)
-    local failed=$(sudo systemctl is-failed "$SERVICE_NAME" 2>/dev/null)
-    
-    if [ "$status" = "inactive" ] && [ "$failed" != "failed" ]; then
-        echo_info "Service $SERVICE_NAME has already completed successfully"
-        check_service_status
-        return 0
-    fi
-    
-    # Start a background process to stream logs
+    # Start journalctl in the background
     sudo journalctl -f -u "$SERVICE_NAME" --no-pager &
-    JOURNALCTL_PID=$!
+    local journal_pid=$!
     
-    # Check service status in a loop until it's completed or failed
-    while true; do
-        # Get the current status of the service
-        STATUS=$(sudo systemctl is-active "$SERVICE_NAME" 2>/dev/null)
+    # Trap to ensure we clean up the background process
+    trap 'kill $journal_pid 2>/dev/null; wait $journal_pid 2>/dev/null; exit' INT TERM EXIT
+    
+    # Monitor service status
+    local max_wait=1800  # 30 minutes timeout
+    local waited=0
+    local check_interval=5
+    
+    while [ $waited -lt $max_wait ]; do
+        local status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
         
-        if [ "$STATUS" = "active" ]; then
-            # Service is still running, wait and check again
-            sleep 2
-        else
-            # Service has completed (successfully or with failure)
-            # Get the final status
-            FINAL_STATUS=$(sudo systemctl is-failed "$SERVICE_NAME" 2>/dev/null)
-            
-            if [ "$FINAL_STATUS" = "failed" ]; then
-                echo_info "Service completed with FAILURE"
+        if [ "$status" = "inactive" ]; then
+            # Service has completed
+            local exit_status=$(systemctl is-failed "$SERVICE_NAME" 2>/dev/null || echo "no")
+            if [ "$exit_status" = "failed" ]; then
+                log "ERROR" "Service failed to complete successfully"
                 sudo systemctl status "$SERVICE_NAME"
             else
-                echo_info "Service completed SUCCESSFULLY"
+                log "SUCCESS" "Service completed successfully"
             fi
-            
-            # Kill the journalctl process
-            kill $JOURNALCTL_PID 2>/dev/null
-            wait $JOURNALCTL_PID 2>/dev/null
             break
         fi
+        
+        # Wait before checking again
+        sleep $check_interval
+        waited=$((waited + check_interval))
     done
     
-    echo_info "To view complete logs at any time, run:"
-    echo_info "sudo journalctl -u $SERVICE_NAME"
-}
-
-check_service_status() {
-    echo_info "Checking $SERVICE_NAME service status..."
-    sudo systemctl status "$SERVICE_NAME"
+    # If we've timed out, report it
+    if [ $waited -ge $max_wait ]; then
+        log "ERROR" "Service monitoring timed out after $max_wait seconds"
+    fi
     
-    echo_info "To view complete logs at any time, run:"
-    echo_info "sudo journalctl -u $SERVICE_NAME"
+    # Clean up the journalctl process
+    kill $journal_pid 2>/dev/null
+    wait $journal_pid 2>/dev/null
+    trap - INT TERM EXIT
+    
+    log "INFO" "To view complete logs at any time, run: sudo journalctl -u $SERVICE_NAME"
 }
 
 # Main execution flow
-# Initialize log file at script start
-init_log_file
-init_systemd_oneshot
+main() {
+    # Initialize logging
+    init_log_file
+    log "INFO" "Starting instance bootstrap oneshot script"
+    
+    # Check current service state
+    check_service_state
+    local service_state=$?
+    
+    case $service_state in
+        0)  # Service has completed successfully
+            log "SUCCESS" "Service has already completed successfully"
+            sudo systemctl status "$SERVICE_NAME"
+            ;;
+        1)  # Service is currently running
+            log "INFO" "Service is currently running, streaming logs"
+            stream_logs
+            ;;
+        2)  # Service needs setup
+            log "INFO" "Setting up and starting service"
+            cleanup_service
+            setup_service
+            stream_logs
+            ;;
+    esac
+    
+    log "INFO" "Instance bootstrap oneshot script completed"
+}
 
-# Stream logs until service completes instead of just checking status
-stream_service_logs_until_complete
+# Execute main function
+main "$@"
