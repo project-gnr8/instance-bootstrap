@@ -1,7 +1,9 @@
 #!/bin/bash
 
-#set -x
+# Strict mode to catch errors and prevent forking issues
+set -euo pipefail
 
+# Define log file path (can be overridden before sourcing)
 LOG_FILE=${LOG_FILE:-"/var/log/instance-bootstrap/startup.log"}
 PRIMARY_DNS="1.1.1.1"
 BACKUP_DNS="8.8.8.8"
@@ -10,6 +12,7 @@ INST_USER=$1
 INST_DRIVER=$2
 INST_METRICS_VARS="$3"
 
+# Initialize log file and set up proper logging
 init_log_file() {
     # Create log directory first
     local log_dir=$(dirname "$LOG_FILE")
@@ -23,14 +26,13 @@ init_log_file() {
     echo "[$( date +"%Y-%m-%dT%H:%M:%S%z" )] [INFO] Log initialized at $LOG_FILE" >> "$LOG_FILE"
 }
 
+# Non-forking echo function 
 echo() {
     local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
     # Format for console (with colors)
-    local console_msg="\033[1;34m[INFO]\033[0m [$timestamp] $1"
+    printf "\033[1;34m[INFO]\033[0m [%s] %s\n" "$timestamp" "$1" >&1
     # Format for log file (without colors)
-    local log_msg="[$timestamp] [INFO] $1"
-    # Output to console and log file using tee
-    echo -e "$console_msg" | tee >(echo "$log_msg" >> "$LOG_FILE")
+    printf "[%s] [INFO] %s\n" "$timestamp" "$1" >> "$LOG_FILE"
 }
 
 # Function to wait for apt lock to be free
@@ -44,15 +46,15 @@ wait_for_apt_lock() {
 
     while sudo fuser "$lock_file" >/dev/null 2>&1; do
         if [ "$elapsed" -ge "$lock_wait_time" ]; then
-            echo -e "\033[1;31m[ERROR]\033[0m Timeout waiting for apt lock to be released."
-            exit 1
+            echo "Timeout waiting for apt lock to be released."
+            return 1
         fi
         echo "Apt lock is currently held by another process. Waiting..."
         sleep "$interval"
         elapsed=$((elapsed + interval))
     done
-
-    echo "Apt lock is now free. Proceeding with package installation."
+    
+    return 0
 }
 
 disable_unattended_upgrades() {

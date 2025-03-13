@@ -95,6 +95,14 @@ init_systemd_oneshot() {
 
     echo_info "Defining $SERVICE_NAME service"
 
+    # Create env file for sensitive variables
+    local env_file="/etc/systemd/$SERVICE_NAME.env"
+    echo "Creating environment file for sensitive variables"
+    echo "INST_USER=${INST_USER}" | sudo tee "$env_file" > /dev/null
+    echo "INST_DRIVER=${INST_DRIVER}" | sudo tee -a "$env_file" > /dev/null
+    echo "INST_METRICS_VARS=${INST_METRICS_VARS}" | sudo tee -a "$env_file" > /dev/null
+    sudo chmod 600 "$env_file"
+
     # Create service file content
     local service_content="[Unit]
 Description=Instance Oneshot Configuration
@@ -102,7 +110,8 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/startup.sh $INST_USER $INST_DRIVER \"$INST_METRICS_VARS\"
+EnvironmentFile=${env_file}
+ExecStart=/opt/startup.sh \${INST_USER} \${INST_DRIVER} \"\${INST_METRICS_VARS}\"
 StandardOutput=journal
 StandardError=journal
 # Set KillMode to process-group to ensure all child processes are terminated
