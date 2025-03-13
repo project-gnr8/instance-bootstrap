@@ -205,6 +205,30 @@ stream_logs() {
     echo_info "To view complete logs at any time, run: sudo journalctl -u $SERVICE_NAME"
 }
 
+# Trap signals to ensure clean shutdown
+trap 'cleanup_and_exit' EXIT TERM INT HUP
+
+# Cleanup function to ensure all processes are terminated
+cleanup_and_exit() {
+    echo_info "Cleaning up processes before exit..."
+    
+    # Kill any background processes started by this script
+    local child_pids=$(jobs -p)
+    if [ -n "$child_pids" ]; then
+        echo_info "Terminating child processes: $child_pids"
+        kill $child_pids 2>/dev/null || true
+    fi
+    
+    # Force kill any remaining processes with our script name
+    pkill -f "$(basename $0)" 2>/dev/null || true
+    
+    echo_success "Cleanup completed"
+    
+    # Remove trap to prevent recursive calls
+    trap - EXIT TERM INT HUP
+    exit 0
+}
+
 # Main execution flow
 main() {
     # Initialize logging
@@ -238,7 +262,8 @@ main() {
     fi
     
     echo_info "Instance bootstrap oneshot script completed"
+    exit 0
 }
 
-# Execute main function
+# Execute main function and ensure we exit
 main
