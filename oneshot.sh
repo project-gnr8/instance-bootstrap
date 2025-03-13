@@ -114,7 +114,7 @@ WantedBy=multi-user.target"
     echo "$service_content" | sudo tee "$SERVICE_FILE" > /dev/null
 
     echo_info "Downloading $STARTUP_SCRIPT_URL"
-    sudo curl -sSL "$STARTUP_SCRIPT_URL" -o /opt/startup.sh
+    sudo curl -sSL -H 'Cache-Control: no-cache' "$STARTUP_SCRIPT_URL" -o /opt/startup.sh
     sudo chmod a+x /opt/startup.sh
     sudo chmod 644 "$SERVICE_FILE"
     sudo systemctl daemon-reload
