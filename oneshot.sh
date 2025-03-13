@@ -38,24 +38,35 @@ init_log_file() {
     fi
 }
 
+# Enhanced logging functions for consistent output
 echo_info() {
+    local message="$1"
     local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
-    # Format for console (with colors)
-    local console_msg="\033[1;34m[INFO]\033[0m [$timestamp] $1"
+    
+    # Format for console with colors
+    printf "\033[1;34m[INFO]\033[0m [%s] %s\n" "$timestamp" "$message" >&1
     # Format for log file (without colors)
-    local log_msg="[$timestamp] [INFO] $1"
-    # Output to console and log file using tee
-    echo -e "$console_msg" | tee -a "$LOG_FILE"
+    printf "[%s] [INFO] %s\n" "$timestamp" "$message" >> "$LOG_FILE"
 }
 
 echo_error() {
+    local message="$1"
     local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
-    # Format for console (with colors)
-    local console_msg="\033[1;31m[ERROR]\033[0m [$timestamp] $1"
+    
+    # Format for console with colors
+    printf "\033[1;31m[ERROR]\033[0m [%s] %s\n" "$timestamp" "$message" >&1
     # Format for log file (without colors)
-    local log_msg="[$timestamp] [ERROR] $1"
-    # Output to console and log file using tee
-    echo -e "$console_msg" | tee -a "$LOG_FILE"
+    printf "[%s] [ERROR] %s\n" "$timestamp" "$message" >> "$LOG_FILE"
+}
+
+echo_success() {
+    local message="$1"
+    local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
+    
+    # Format for console with colors
+    printf "\033[1;32m[SUCCESS]\033[0m [%s] %s\n" "$timestamp" "$message" >&1
+    # Format for log file (without colors)
+    printf "[%s] [SUCCESS] %s\n" "$timestamp" "$message" >> "$LOG_FILE"
 }
 
 # Check if service is already running or has completed
