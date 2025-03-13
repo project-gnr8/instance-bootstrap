@@ -123,6 +123,7 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target"
 
+
     # Write service file using sudo tee instead of redirection
     echo "$service_content" | sudo tee "$SERVICE_FILE" > /dev/null
 
