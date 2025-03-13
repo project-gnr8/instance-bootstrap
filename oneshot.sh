@@ -3,16 +3,18 @@
 # Enable debug mode to see what's happening
 set -x
 
-# Define log file path and key variables
-LOG_FILE=${LOG_FILE:-"/var/log/instance-bootstrap/oneshot.log"}
-STARTUP_SCRIPT_URL=${STARTUP_SCRIPT_URL:-"https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/startup.sh"}
-SERVICE_NAME="instance-oneshot"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-
 # Parse command line arguments
 INST_USER=$1
 INST_DRIVER=$2
-INST_METRICS_VARS="aws_timestream_access_key='$3' aws_timestream_secret_key='$4' aws_timestream_database='$5' aws_timestream_region='$6' environmentID='$7'"
+# Pass the metrics variables as a single string without adding extra quotes
+INST_METRICS_VARS="$3"
+
+# Define log file path and key variables
+user_home=$(eval echo ~$INST_USER)
+LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
+STARTUP_SCRIPT_URL=${STARTUP_SCRIPT_URL:-"https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/startup.sh"}
+SERVICE_NAME="instance-oneshot"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 # Function to initialize log file and directory
 init_log_file() {
@@ -198,7 +200,9 @@ main() {
         
         # Setup and start service
         setup_service
-        stream_logs
+        
+        ## Disable log streaming
+        ## stream_logs
     fi
     
     echo_info "Instance bootstrap oneshot script completed"

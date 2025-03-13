@@ -3,14 +3,15 @@
 # Strict mode to catch errors and prevent forking issues
 set -euo pipefail
 
-# Define log file path (can be overridden before sourcing)
-LOG_FILE=${LOG_FILE:-"/var/log/instance-bootstrap/startup.log"}
-PRIMARY_DNS="1.1.1.1"
-BACKUP_DNS="8.8.8.8"
-
 INST_USER=$1
 INST_DRIVER=$2
 INST_METRICS_VARS="$3"
+
+# Define log file path (can be overridden before sourcing)
+user_home=$(eval echo ~$INST_USER)
+LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
+PRIMARY_DNS="1.1.1.1"
+BACKUP_DNS="8.8.8.8"
 
 # Initialize log file and set up proper logging
 init_log_file() {
@@ -97,16 +98,10 @@ update_dns() {
 install_metrics() {
     echo "Setting up metrics with variables: $INST_METRICS_VARS"
     
-    # Parse the metrics variables string into an array
-    # This handles both space-separated key=value pairs and quoted values
-    local metrics_array=()
-    
-    # Read the string into an array, respecting quoted values
-    eval "metrics_array=($INST_METRICS_VARS)"
-    
-    # Pass each parameter individually to the setup script
+    # The metrics script expects individual space-separated arguments
+    # We need to pass them directly to bash -s without any array processing
     curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | \
-        bash -s -- "${metrics_array[@]}"
+        bash -s -- $INST_METRICS_VARS
     
     echo "Metrics setup completed"
 }
@@ -335,9 +330,6 @@ init_ephemeral_dir() {
 
 init_workbench_install() {
     echo "Setting up workbench installation for user $INST_USER..."
-    
-    # Get the home directory for INST_USER
-    local user_home=$(eval echo ~$INST_USER)
     echo "User home directory: $user_home"
     
     # Create the directory structure
