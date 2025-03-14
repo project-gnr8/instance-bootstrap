@@ -173,7 +173,7 @@ install_nvidia_driver() {
         sudo apt install nvidia-container-toolkit nvidia-container-toolkit-base -y --allow-change-held-packages
     fi
 
-    if command -v sudo docker &> /dev/null; then
+    if command -v docker &> /dev/null; then
         echo "Docker is installed."
         # Check if Docker is managed by systemd
         if sudo systemctl list-units --full -all | grep -q 'docker.service'; then
@@ -199,7 +199,7 @@ install_nvidia_driver() {
 }
 
 install_docker() {
-    if ! type docker &> /dev/null; then
+    if ! command -v docker &> /dev/null; then
         echo "Installing Docker..."
         # https://docs.docker.com/engine/install/ubuntu/
         with_retry 5 10s sudo apt-get update
@@ -386,8 +386,8 @@ init_log_file
 echo "Starting system configuration..."
 update_dns || { echo "DNS configuration failed"; exit 1; }
 disable_unattended_upgrades || { echo "Disabling unattended upgrades failed"; exit 1; }
-install_nvidia_driver || { echo "NVIDIA driver installation failed"; exit 1; }
 install_docker || { echo "Docker installation failed"; exit 1; }
+install_nvidia_driver || { echo "NVIDIA driver installation failed"; exit 1; }
 install_metrics || { echo "Metrics installation failed"; exit 1; }
 init_ephemeral_dir || { echo "Ephemeral directory creation failed"; exit 1; }
 
