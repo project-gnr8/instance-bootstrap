@@ -141,7 +141,7 @@ install_nvidia_driver() {
         return
     else
         echo_info "Installing NVIDIA driver..."
-        desired_version=%s
+        desired_version=$INST_DRIVER
         # Attempt to get the currently used NVIDIA driver version
         current_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null) || current_version=""
 
