@@ -125,7 +125,7 @@ update_dns() {
 }
 
 install_metrics() {
-    echo_info "Setting up metrics with variables: $INST_METRICS_VARS"
+    echo_info "Setting up metrics..."
     
     # The metrics script expects individual space-separated arguments
     # We need to pass them directly to bash -s without any array processing
