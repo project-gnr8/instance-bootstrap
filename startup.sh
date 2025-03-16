@@ -36,6 +36,11 @@ echo_info() {
     printf "[%s] [INFO] %s\n" "$timestamp" "$1" >> "$LOG_FILE"
 }
 
+
+ log() {
+     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+ }
+
 with_retry() {
 	local max_attempts="$1"
 	local delay="$2"
