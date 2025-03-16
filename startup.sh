@@ -28,7 +28,7 @@ init_log_file() {
 }
 
 # Non-forking echo function 
-echo() {
+echo_info() {
     local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
     # Format for console (with colors)
     printf "\033[1;34m[INFO]\033[0m [%s] %s\n" "$timestamp" "$1" >&1
@@ -43,14 +43,14 @@ wait_for_apt_lock() {
     local interval=5          # Interval between checks in seconds
     local elapsed=0
 
-    echo "Waiting for apt lock to be released..."
+    echo_info "Waiting for apt lock to be released..."
 
     while sudo fuser "$lock_file" >/dev/null 2>&1; do
         if [ "$elapsed" -ge "$lock_wait_time" ]; then
-            echo "Timeout waiting for apt lock to be released."
+            echo_info "Timeout waiting for apt lock to be released."
             return 1
         fi
-        echo "Apt lock is currently held by another process. Waiting..."
+        echo_info "Apt lock is currently held by another process. Waiting..."
         sleep "$interval"
         elapsed=$((elapsed + interval))
     done
@@ -59,7 +59,7 @@ wait_for_apt_lock() {
 }
 
 disable_unattended_upgrades() {
-    echo "Disabling unattended-upgrades..."
+    echo_info "Disabling unattended-upgrades..."
     set +e # Disable exit on error -- want to try all
 	sudo systemctl stop unattended-upgrades
 	sudo pkill --signal SIGKILL unattended-upgrades
@@ -71,7 +71,7 @@ disable_unattended_upgrades() {
 }
 
 update_dns() {
-    echo "Updating DNS configuration..."
+    echo_info "Updating DNS configuration..."
     # Path to the systemd-resolved configuration
     RESOLVED_CONF="/etc/systemd/resolved.conf"
 
@@ -92,34 +92,34 @@ update_dns() {
     # Restart systemd-resolved to apply changes
     sudo systemctl restart systemd-resolved
 
-    echo "DNS servers have been updated to ${PRIMARY_DNS} (primary) and ${BACKUP_DNS} (backup)."
+    echo_info "DNS servers have been updated to ${PRIMARY_DNS} (primary) and ${BACKUP_DNS} (backup)."
 }
 
 install_metrics() {
-    echo "Setting up metrics with variables: $INST_METRICS_VARS"
+    echo_info "Setting up metrics with variables: $INST_METRICS_VARS"
     
     # The metrics script expects individual space-separated arguments
     # We need to pass them directly to bash -s without any array processing
     curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | \
         bash -s -- $INST_METRICS_VARS
     
-    echo "Metrics setup completed"
+    echo_info "Metrics setup completed"
 }
 
 install_nvidia_driver() {
     if [ "$INST_DRIVER" = "disabled" ]; then
-        echo "NVIDIA driver installation is disabled. Skipping..."
+        echo_info "NVIDIA driver installation is disabled. Skipping..."
         return
     else
-        echo "Installing NVIDIA driver..."
+        echo_info "Installing NVIDIA driver..."
         desired_version=%s
         # Attempt to get the currently used NVIDIA driver version
         current_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null) || current_version=""
 
         # Check if nvidia-smi command succeeded
         if [ -z "$current_version" ]; then
-            echo "nvidia-smi command failed. This could indicate that NVIDIA drivers are not installed."
-            echo "Proceeding with installation of nvidia-driver-$desired_version..."
+            echo_info "nvidia-smi command failed. This could indicate that NVIDIA drivers are not installed."
+            echo_info "Proceeding with installation of nvidia-driver-$desired_version..."
             sudo apt update
             sudo apt install "nvidia-driver-$desired_version" -y
         else
@@ -129,11 +129,11 @@ install_nvidia_driver() {
             
             # Compare versions
             if [ "$current_major" -lt "$desired_major" ]; then
-                echo "Current NVIDIA driver version ($current_version) is older than $desired_version. Installing $desired_version..."
+                echo_info "Current NVIDIA driver version ($current_version) is older than $desired_version. Installing $desired_version..."
                 sudo apt update
                 sudo apt install "nvidia-driver-$desired_version" -y
             else
-                echo "Current NVIDIA driver version ($current_version) is greater than or equal to $desired_version. Keeping the current version."
+                echo_info "Current NVIDIA driver version ($current_version) is greater than or equal to $desired_version. Keeping the current version."
             fi
         fi
     fi
@@ -151,18 +151,18 @@ install_nvidia_driver() {
         current_major_minor=$(echo "$current_ctk_version" | cut -d. -f1,2)
         
         if [[ "$(echo -e "$required_ctk_version\n$current_major_minor" | sort -V | head -n1)" != "$required_ctk_version" ]]; then
-            echo "nvidia-ctk version ($current_ctk_version) is older than required ($required_ctk_version)."
+            echo_info "nvidia-ctk version ($current_ctk_version) is older than required ($required_ctk_version)."
             nvidia_ctk_needs_install=true
         else
-            echo "nvidia-ctk version ($current_ctk_version) meets the requirement (>= $required_ctk_version)."
+            echo_info "nvidia-ctk version ($current_ctk_version) meets the requirement (>= $required_ctk_version)."
         fi
     else
-        echo "nvidia-ctk not found."
+        echo_info "nvidia-ctk not found."
         nvidia_ctk_needs_install=true
     fi
 
     if $nvidia_ctk_needs_install; then
-        echo "Installing/upgrading nvidia-container-toolkit..."
+        echo_info "Installing/upgrading nvidia-container-toolkit..."
         sudo rm -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
         curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
             | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
@@ -174,33 +174,33 @@ install_nvidia_driver() {
     fi
 
     if command -v docker &> /dev/null; then
-        echo "Docker is installed."
+        echo_info "Docker is installed."
         # Check if Docker is managed by systemd
         if sudo systemctl list-units --full -all | grep -q 'docker.service'; then
-            echo "Docker is managed by systemd. Attempting to restart Docker service..."
+            echo_info "Docker is managed by systemd. Attempting to restart Docker service..."
 
             # Restart Docker service
             sudo systemctl restart docker.service
 
             if [ $? -eq 0 ]; then
-                echo "Docker service restarted successfully."
+                echo_info "Docker service restarted successfully."
             else
-                echo "Failed to restart Docker service. Attempting a stop & start"
+                echo_info "Failed to restart Docker service. Attempting a stop & start"
                 sudo systemctl stop docker.service
                 sleep 3
                 sudo systemctl start docker.service
             fi
         else
-            echo "Docker is not managed by systemd or the docker.service does not exist."
+            echo_info "Docker is not managed by systemd or the docker.service does not exist."
         fi
     else
-        echo "Docker is not installed."
+        echo_info "Docker is not installed."
     fi
 }
 
 install_docker() {
     if ! command -v docker &> /dev/null; then
-        echo "Installing Docker..."
+        echo_info "Installing Docker..."
         # https://docs.docker.com/engine/install/ubuntu/
         with_retry 5 10s sudo apt-get update
         sudo apt-get install -y \
@@ -220,23 +220,23 @@ install_docker() {
         sudo systemctl enable containerd.service
         
         if ! sudo systemctl start docker; then
-            echo "Failed to start Docker service. Exiting."
+            echo_info "Failed to start Docker service. Exiting."
         fi
-        echo "Docker installed successfully."
+        echo_info "Docker installed successfully."
     else
-        echo "Docker is already installed."
+        echo_info "Docker is already installed."
     fi
 
-    echo "Configuring Docker daemon MTU..."
+    echo_info "Configuring Docker daemon MTU..."
     HOST_MTU=$(ip -o link show $(ip route get 8.8.8.8 | grep -oP 'dev \K\w+') | grep -oP 'mtu \K\d+')
     if [ -n "$HOST_MTU" ]; then
-        echo "Host MTU detected: $HOST_MTU"
+        echo_info "Host MTU detected: $HOST_MTU"
         sudo mkdir -p /etc/docker
         if [ -s /etc/docker/daemon.json ]; then
             # If daemon.json exists, merge in the MTU setting
             if jq . /etc/docker/daemon.json > /dev/null 2>&1; then
                 # Valid JSON file, update it
-                echo "Valid JSON file, updating /etc/docker/daemon.json"
+                echo_info "Valid JSON file, updating /etc/docker/daemon.json"
                 # Create a temporary file for the updated JSON
                 TEMP_FILE=$(mktemp)
 
@@ -248,14 +248,14 @@ install_docker() {
                     # Replace the original file with the updated one
                     sudo cp "$TEMP_FILE" /etc/docker/daemon.json
                 else
-                    echo "Error updating daemon.json with MTU setting"
+                    echo_info "Error updating daemon.json with MTU setting"
                 fi
 
                 # Clean up
                 rm -f "$TEMP_FILE"
             else
                 # Invalid JSON, overwrite it
-                echo "Invalid JSON, overwriting /etc/docker/daemon.json"
+                echo_info "Invalid JSON, overwriting /etc/docker/daemon.json"
                 echo "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
             fi
         else
@@ -263,34 +263,34 @@ install_docker() {
             echo "{\"mtu\": $HOST_MTU}" | sudo tee /etc/docker/daemon.json > /dev/null
         fi
         sudo systemctl restart docker
-        echo "Docker MTU configured to match host MTU"
+        echo_info "Docker MTU configured to match host MTU"
     else
-        echo "Could not detect host MTU, skipping Docker MTU configuration"
+        echo_info "Could not detect host MTU, skipping Docker MTU configuration"
     fi
 
-    echo "Configuring cdi"
-    sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml || echo "issue enabling CDI"
+    echo_info "Configuring cdi"
+    sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml || echo_info "issue enabling CDI"
 
-    echo "Configuring NVIDIA runtime and restarting Docker..."
+    echo_info "Configuring NVIDIA runtime and restarting Docker..."
     if ! sudo nvidia-ctk runtime configure --runtime=docker --set-as-default; then
-        echo "Failed to configure NVIDIA runtime. Skipping Docker restart."
+        echo_info "Failed to configure NVIDIA runtime. Skipping Docker restart."
     else
         if ! sudo systemctl restart docker.service; then
-            echo "Failed to restart Docker service. Attempting to start it..."
+            echo_info "Failed to restart Docker service. Attempting to start it..."
             if ! sudo systemctl start docker.service; then
-                echo "Failed to start Docker service. Please check your Docker installation."
+                echo_info "Failed to start Docker service. Please check your Docker installation."
             else
-                echo "Failed to restart Docker service. Attempting a stop & start"
+                echo_info "Failed to restart Docker service. Attempting a stop & start"
                 sudo systemctl stop docker.service
                 sleep 3
                 sudo systemctl start docker.service 
             fi
         fi
-        echo "NVIDIA runtime configured and Docker service restarted successfully."
+        echo_info "NVIDIA runtime configured and Docker service restarted successfully."
     fi
 
-    echo "Setting NVIDIA CTK default mode to 'cdi'..."
-    sudo nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi || echo "Failed to set NVIDIA CTK default mode to 'cdi'."
+    echo_info "Setting NVIDIA CTK default mode to 'cdi'..."
+    sudo nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi || echo_info "Failed to set NVIDIA CTK default mode to 'cdi'."
 
     # Establish service for cdi refresh
     SERVICE_FILE="/etc/systemd/system/nvidia-cdi-refresh.service"
@@ -312,33 +312,33 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload && sudo systemctl enable --now nvidia-cdi-refresh.service
-    echo "nvidia-cdi-refresh service configured."
+    echo_info "nvidia-cdi-refresh service configured."
     else
-    echo "nvidia-cdi-refresh service already exists."
+    echo_info "nvidia-cdi-refresh service already exists."
     fi
 
     # Verify Docker is running
     if ! docker info &>/dev/null; then
-        echo "Docker is not running. Please check your Docker installation."
+        echo_info "Docker is not running. Please check your Docker installation."
     else
-        echo "Docker is running correctly."
+        echo_info "Docker is running correctly."
         docker --version
     fi
 
     # add user to docker group
-    echo "Adding user $INST_USER to docker group..."
+    echo_info "Adding user $INST_USER to docker group..."
     sudo usermod -aG docker $INST_USER
 }
 
 init_ephemeral_dir() {
-    echo "Creating ephemeral directory..."
+    echo_info "Creating ephemeral directory..."
     sudo mkdir -p /ephemeral
     sudo chmod 777 /ephemeral
 }
 
 init_workbench_install() {
-    echo "Setting up workbench installation for user $INST_USER..."
-    echo "User home directory: $user_home"
+    echo_info "Setting up workbench installation for user $INST_USER..."
+    echo_info "User home directory: $user_home"
     
     # Create the directory structure
     sudo -u $INST_USER mkdir -p $user_home/.nvwb/bin
@@ -357,7 +357,7 @@ EOFMARKER"
     # Set proper permissions and run in background exactly like original
     sudo -u $INST_USER bash -c "chmod +x $user_home/.nvwb/install.sh && (nohup $user_home/.nvwb/install.sh > /dev/null 2>&1 &)"
     
-    echo "Workbench installation initiated in the background."
+    echo_info "Workbench installation initiated in the background."
 }
 
 wait_docker() {
@@ -365,16 +365,16 @@ wait_docker() {
     RETRY_INTERVAL=5
     for i in $(seq 1 $MAX_RETRIES); do
         if sudo docker info &>/dev/null; then
-            echo "Docker daemon is up and running"
+            echo_info "Docker daemon is up and running"
             return 0
         fi
         
         if [ $i -eq $MAX_RETRIES ]; then
-            echo "Error: Docker daemon failed to start properly after $MAX_RETRIES attempts"
+            echo_info "Error: Docker daemon failed to start properly after $MAX_RETRIES attempts"
             return 1
         fi
         
-        echo "Waiting for Docker daemon to start (attempt $i/$MAX_RETRIES)..."
+        echo_info "Waiting for Docker daemon to start (attempt $i/$MAX_RETRIES)..."
         sleep $RETRY_INTERVAL
     done
 }
@@ -383,16 +383,16 @@ wait_docker() {
 init_log_file
 
 # Run functions with error handling to prevent script from continuing if a critical function fails
-echo "Starting system configuration..."
-update_dns || { echo "DNS configuration failed"; exit 1; }
-disable_unattended_upgrades || { echo "Disabling unattended upgrades failed"; exit 1; }
-install_docker || { echo "Docker installation failed"; exit 1; }
-install_nvidia_driver || { echo "NVIDIA driver installation failed"; exit 1; }
-install_metrics || { echo "Metrics installation failed"; exit 1; }
-init_ephemeral_dir || { echo "Ephemeral directory creation failed"; exit 1; }
+echo_info "Starting system configuration..."
+update_dns || { echo_info "DNS configuration failed"; exit 1; }
+disable_unattended_upgrades || { echo_info "Disabling unattended upgrades failed"; exit 1; }
+install_docker || { echo_info "Docker installation failed"; exit 1; }
+install_nvidia_driver || { echo_info "NVIDIA driver installation failed"; exit 1; }
+install_metrics || { echo_info "Metrics installation failed"; exit 1; }
+init_ephemeral_dir || { echo_info "Ephemeral directory creation failed"; exit 1; }
 
 # These are non-critical, so we can continue even if they fail
-init_workbench_install || echo "Workbench installation setup failed, but continuing"
-wait_docker || echo "Docker daemon not responding, but continuing"
+init_workbench_install || echo_info "Workbench installation setup failed, but continuing"
+wait_docker || echo_info "Docker daemon not responding, but continuing"
 
-echo "System configuration completed successfully"
+echo_info "System configuration completed successfully"
