@@ -37,9 +37,9 @@ echo_info() {
 }
 
 
- log() {
-     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
- }
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
 
 with_retry() {
 	local max_attempts="$1"
