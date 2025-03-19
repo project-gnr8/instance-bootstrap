@@ -332,7 +332,7 @@ install_docker() {
     sudo tee "$SERVICE_FILE" >/dev/null << 'EOF'
 [Unit]
 Description=Refresh NVIDIA CDI configuration and restart Docker
-After=network.target docker.service lifecycle-script.service
+After=network.target docker.service
 Requires=docker.service
 
 [Service]

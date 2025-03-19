@@ -120,7 +120,7 @@ setup_service() {
     cat << EOF | sudo tee "$SERVICE_FILE" > /dev/null
 [Unit]
 Description=Instance Oneshot Configuration
-After=network-online.target
+After=network-online.target lifecycle-script.service
 Wants=network-online.target
 
 [Service]
