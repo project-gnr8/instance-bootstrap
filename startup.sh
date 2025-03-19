@@ -6,12 +6,18 @@ set -euo pipefail
 INST_USER=$1
 INST_DRIVER=$2
 INST_METRICS_VARS="$3"
+# Add support for image list argument
+IMAGE_LIST_JSON=${4:-'["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]'}
 
 # Define log file path (can be overridden before sourcing)
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
 PRIMARY_DNS="1.1.1.1"
 BACKUP_DNS="8.8.8.8"
+# Define image prestaging status file
+PRESTAGE_STATUS_FILE="/opt/prestage/docker-images-prestage-status.json"
+PRESTAGE_DIR="/opt/prestage/docker-images"
+IMPORT_SCRIPT="/opt/image-import.sh"
 
 # Initialize log file and set up proper logging
 init_log_file() {
@@ -413,6 +419,102 @@ wait_docker() {
     done
 }
 
+# Function to check image prestaging status and import images if ready
+check_and_import_images() {
+    echo_info "Checking Docker image prestaging status..."
+    
+    # Check if status file exists
+    if [ ! -f "$PRESTAGE_STATUS_FILE" ]; then
+        echo_info "Image prestaging status file not found. Prestaging may not be configured."
+        return 0
+    fi
+    
+    # Check if jq is installed
+    if ! command -v jq &>/dev/null; then
+        echo_info "jq is not installed. Installing..."
+        sudo apt-get update -y > /dev/null
+        sudo apt-get install -y jq > /dev/null
+    fi
+    
+    # Check status
+    local status=$(jq -r '.status' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "unknown")
+    local total=$(jq -r '.total' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "0")
+    local completed=$(jq -r '.completed' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "0")
+    
+    echo_info "Image prestaging status: $status ($completed/$total completed)"
+    
+    # If prestaging is completed, import the images
+    if [ "$status" = "completed" ] || [ "$status" = "completed_with_errors" ]; then
+        echo_info "Image prestaging completed. Importing images..."
+        
+        # Check if import script exists
+        if [ ! -f "$IMPORT_SCRIPT" ]; then
+            echo_info "Image import script not found: $IMPORT_SCRIPT"
+            return 1
+        fi
+        
+        # Run the import script
+        sudo "$IMPORT_SCRIPT" "$INST_USER" "$PRESTAGE_STATUS_FILE" "$PRESTAGE_DIR"
+        
+        if [ $? -eq 0 ]; then
+            echo_info "Docker images imported successfully"
+        else
+            echo_info "Some Docker images failed to import. Check logs for details."
+        fi
+    else
+        echo_info "Image prestaging is not yet complete. Current status: $status"
+        echo_info "Images will be available after prestaging completes."
+    fi
+    
+    return 0
+}
+
+# Function to monitor image prestaging status with timeout
+monitor_image_prestaging() {
+    local timeout=300  # 5 minutes timeout
+    local check_interval=15
+    local elapsed=0
+    
+    echo_info "Monitoring image prestaging status (timeout: ${timeout}s)..."
+    
+    # Check if status file exists
+    if [ ! -f "$PRESTAGE_STATUS_FILE" ]; then
+        echo_info "Image prestaging status file not found. Skipping monitoring."
+        return 0
+    fi
+    
+    # Check if jq is installed
+    if ! command -v jq &>/dev/null; then
+        echo_info "jq is not installed. Installing..."
+        sudo apt-get update -y > /dev/null
+        sudo apt-get install -y jq > /dev/null
+    fi
+    
+    while [ $elapsed -lt $timeout ]; do
+        # Check status
+        local status=$(jq -r '.status' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "unknown")
+        local total=$(jq -r '.total' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "0")
+        local completed=$(jq -r '.completed' "$PRESTAGE_STATUS_FILE" 2>/dev/null || echo "0")
+        
+        echo_info "Image prestaging status: $status ($completed/$total completed)"
+        
+        # If prestaging is completed, import the images
+        if [ "$status" = "completed" ] || [ "$status" = "completed_with_errors" ]; then
+            echo_info "Image prestaging completed. Importing images..."
+            check_and_import_images
+            return 0
+        fi
+        
+        # If still initializing or downloading, wait and check again
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+    done
+    
+    echo_info "Timeout reached while waiting for image prestaging to complete."
+    echo_info "Images will be available after prestaging completes in the background."
+    return 0
+}
+
 # Initialize log file at script start
 init_log_file
 
@@ -429,4 +531,10 @@ init_ephemeral_dir || { echo_info "Ephemeral directory creation failed"; exit 1;
 init_workbench_install || echo_info "Workbench installation setup failed, but continuing"
 wait_docker || echo_info "Docker daemon not responding, but continuing"
 
+# Check image prestaging status and import images if ready
+check_and_import_images || echo_info "Image import check failed, but continuing"
+
 echo_info "System configuration completed successfully"
+
+# Monitor image prestaging status in the background
+(monitor_image_prestaging &)
