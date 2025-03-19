@@ -12,7 +12,7 @@ INST_METRICS_VARS="$3"
 # Define log file path and key variables
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
-STARTUP_SCRIPT_URL=${STARTUP_SCRIPT_URL:-"https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/wait-for-lifecycle/startup.sh"}
+STARTUP_SCRIPT_URL=${STARTUP_SCRIPT_URL:-"https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/startup.sh"}
 SERVICE_NAME="instance-oneshot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
