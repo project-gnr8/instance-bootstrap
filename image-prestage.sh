@@ -15,7 +15,13 @@ STATUS_FILE="/opt/prestage/docker-images-prestage-status.json"
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
 
-PARALLEL_DOWNLOADS=4
+# Configure parallel downloads
+# Use more threads for faster downloads
+PARALLEL_THREADS=16
+# Use more processes for parallel downloads
+PARALLEL_PROCESSES=8
+# Set higher sliced download threshold for large files (50MB)
+SLICED_OBJECT_THRESHOLD=50M
 
 # Initialize log file
 init_log_file() {
@@ -133,80 +139,66 @@ parse_image_list() {
     echo "{\"status\":\"downloading\",\"completed\":0,\"total\":$total_images,\"images\":$IMAGE_LIST_JSON}" | sudo tee "$STATUS_FILE" > /dev/null
 }
 
+# Update status file
+update_status() {
+    local status=$1
+    local completed=$2
+    local total=$3
+    echo "{\"status\":\"$status\",\"completed\":$completed,\"total\":$total,\"images\":$(jq '.images' "$STATUS_FILE")}" | sudo tee "$STATUS_FILE" > /dev/null
+}
+
 # Download images from GCS with parallel processing
 download_images() {
-    echo_info "Starting parallel image downloads from GCS bucket: $GCS_BUCKET"
+    echo_info "Starting Docker image downloads from GCS bucket: $GCS_BUCKET"
     
-    # Get image list from status file
-    local images=$(jq -r '.images | .[]' "$STATUS_FILE")
-    local total=$(jq -r '.total' "$STATUS_FILE")
+    # Parse image list from JSON
+    local images=$(echo "$IMAGE_LIST_JSON" | jq -r '.[]')
+    local total=$(echo "$IMAGE_LIST_JSON" | jq -r '. | length')
     local completed=0
     local failed=0
-    local image_files=()
+    
+    # Update status file with total count
+    update_status "downloading" $completed $total
+    
+    # Configure gsutil for maximum performance
+    echo_info "Configuring gsutil for parallel downloads"
+    # Set parallel thread count
+    gsutil -o "GSUtil:parallel_thread_count=$PARALLEL_THREADS" -o "GSUtil:parallel_process_count=$PARALLEL_PROCESSES" -o "GSUtil:sliced_object_download_threshold=$SLICED_OBJECT_THRESHOLD" version > /dev/null
     
     # Process each image
     for image in $images; do
         # Convert image name to a valid filename
         local safe_name=$(echo "$image" | tr '/:' '_-')
         local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
-        local gcs_path="gs://$GCS_BUCKET/${safe_name}.tar"
+        local gcs_path="gs://${GCS_BUCKET}/${safe_name}.tar"
         
-        image_files+=("$tar_file")
-        echo_info "Queuing download for image: $image (from $gcs_path)"
-    done
-    
-    # Use GNU Parallel to download multiple files concurrently
-    if [ ${#image_files[@]} -gt 0 ]; then
-        echo_info "Starting parallel downloads with $PARALLEL_DOWNLOADS concurrent jobs"
+        echo_info "Downloading image: $image from $gcs_path"
         
-        # Create a temporary file with download commands
-        local cmd_file=$(mktemp)
-        local i=0
+        # Add image to status file
+        jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" | sudo tee "$STATUS_FILE.tmp" > /dev/null
+        sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        for image in $images; do
-            local safe_name=$(echo "$image" | tr '/:' '_-')
-            local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
-            local gcs_path="gs://$GCS_BUCKET/${safe_name}.tar"
-            
-            echo "gsutil -o GSUtil:parallel_composite_upload_threshold=150M -m cp \"$gcs_path\" \"$tar_file\" && echo \"SUCCESS:$image\" || echo \"FAILED:$image\"" >> "$cmd_file"
-            ((i++))
-        done
-        
-        # Install GNU Parallel if not present
-        if ! command -v parallel &>/dev/null; then
-            echo_info "Installing GNU Parallel for concurrent downloads..."
-            sudo apt-get update -y > /dev/null
-            sudo apt-get install -y parallel > /dev/null
+        # Download the image using gsutil with parallel download
+        if gsutil -m -o "GSUtil:parallel_thread_count=$PARALLEL_THREADS" -o "GSUtil:parallel_process_count=$PARALLEL_PROCESSES" -o "GSUtil:sliced_object_download_threshold=$SLICED_OBJECT_THRESHOLD" cp "$gcs_path" "$tar_file"; then
+            echo_success "Successfully downloaded image: $image"
+            ((completed++))
+        else
+            echo_error "Failed to download image: $image"
+            ((failed++))
         fi
         
-        # Run downloads in parallel and capture results
-        parallel --jobs "$PARALLEL_DOWNLOADS" --bar < "$cmd_file" | while read -r result; do
-            if [[ "$result" == SUCCESS:* ]]; then
-                image="${result#SUCCESS:}"
-                echo_success "Successfully downloaded image: $image"
-                ((completed++))
-                # Update status file with progress
-                jq --arg completed "$completed" '.completed = ($completed|tonumber)' "$STATUS_FILE" | sudo tee "$STATUS_FILE.tmp" > /dev/null
-                sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
-            elif [[ "$result" == FAILED:* ]]; then
-                image="${result#FAILED:}"
-                echo_error "Failed to download image: $image"
-                ((failed++))
-            fi
-        done
-        
-        # Clean up
-        rm -f "$cmd_file"
-    fi
+        # Update status file
+        update_status "downloading" $completed $total
+    done
     
     # Final status update
     if [ $failed -gt 0 ]; then
+        update_status "completed_with_errors" $completed $total
         echo_error "$failed out of $total downloads failed"
-        echo "{\"status\":\"completed_with_errors\",\"completed\":$completed,\"total\":$total,\"failed\":$failed,\"images\":$(jq '.images' "$STATUS_FILE")}" | sudo tee "$STATUS_FILE" > /dev/null
         return 1
     else
+        update_status "completed" $completed $total
         echo_success "All $total images downloaded successfully"
-        echo "{\"status\":\"completed\",\"completed\":$total,\"total\":$total,\"failed\":0,\"images\":$(jq '.images' "$STATUS_FILE")}" | sudo tee "$STATUS_FILE" > /dev/null
         return 0
     fi
 }
