@@ -11,17 +11,18 @@ GCS_BUCKET=${3:-"brev-image-prestage"}
 # Define constants and paths
 PRESTAGE_DIR="/opt/prestage/docker-images"
 STATUS_FILE="/opt/prestage/docker-images-prestage-status.json"
+SIGNED_URL_SERVICE="https://gcs-signed-url-service-145097832422.us-central1.run.app"
 
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
 
 # Configure parallel downloads
 # Use more threads for faster downloads
-PARALLEL_THREADS=16
+PARALLEL_CONNECTIONS=16
 # Use more processes for parallel downloads
-PARALLEL_PROCESSES=8
+PARALLEL_DOWNLOADS=8
 # Set higher sliced download threshold for large files (50MB)
-SLICED_OBJECT_THRESHOLD=50M
+MIN_SPLIT_SIZE="50M"
 
 # Initialize log file
 init_log_file() {
@@ -60,33 +61,6 @@ echo_success() {
     printf "\033[1;32m[SUCCESS]\033[0m [%s] %s\n" "$timestamp" "$1" >&1
     # Format for log file (without colors)
     printf "[%s] [SUCCESS] %s\n" "$timestamp" "$1" >> "$LOG_FILE"
-}
-
-# Install GCS client with retry logic
-install_gcs_client() {
-    echo_info "Installing Google Cloud SDK for GCS access..."
-    
-    if command -v gsutil &>/dev/null; then
-        echo_info "Google Cloud SDK already installed."
-        return 0
-    fi
-    
-    # Add the Cloud SDK distribution URI as a package source
-    echo_info "Adding Google Cloud SDK repository..."
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
-        sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null
-    
-    # Import the Google Cloud public key
-    echo_info "Importing Google Cloud SDK keys..."
-    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-        sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - > /dev/null
-    
-    # Update and install the Cloud SDK
-    echo_info "Installing Google Cloud SDK packages..."
-    sudo apt-get update -y > /dev/null
-    sudo apt-get install -y google-cloud-sdk-gcs-auth-only > /dev/null
-    
-    echo_success "Google Cloud SDK installed successfully."
 }
 
 # Prepare the staging directory
@@ -147,9 +121,43 @@ update_status() {
     echo "{\"status\":\"$status\",\"completed\":$completed,\"total\":$total,\"images\":$(jq '.images' "$STATUS_FILE")}" | sudo tee "$STATUS_FILE" > /dev/null
 }
 
-# Download images from GCS with parallel processing
+# Get signed URL from GCS signed URL service
+get_signed_url() {
+    local object_name=$1
+    local expiration=${2:-3600}
+    
+    echo_info "Requesting signed URL for object: $object_name"
+    
+    # Prepare request payload
+    local payload="{\"object\":\"$object_name\",\"expiration\":$expiration,\"method\":\"GET\"}"
+    
+    # Make request to signed URL service
+    local response
+    response=$(curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
+                   -H "Content-Type: application/json" \
+                   -d "$payload")
+    
+    # Check if request was successful
+    if [ $? -ne 0 ]; then
+        echo_error "Failed to get signed URL for object: $object_name"
+        return 1
+    fi
+    
+    # Extract signed URL from response
+    local signed_url=$(echo "$response" | jq -r '.signed_url')
+    
+    if [ -z "$signed_url" ] || [ "$signed_url" = "null" ]; then
+        echo_error "Invalid response from signed URL service: $response"
+        return 1
+    fi
+    
+    echo "$signed_url"
+    return 0
+}
+
+# Download images using aria2c with parallel processing
 download_images() {
-    echo_info "Starting Docker image downloads from GCS bucket: $GCS_BUCKET"
+    echo_info "Starting Docker image downloads using signed URLs"
     
     # Parse image list from JSON
     local images=$(echo "$IMAGE_LIST_JSON" | jq -r '.[]')
@@ -160,26 +168,38 @@ download_images() {
     # Update status file with total count
     update_status "downloading" $completed $total
     
-    # Configure gsutil for maximum performance
-    echo_info "Configuring gsutil for parallel downloads"
-    # Set parallel thread count
-    gsutil -o "GSUtil:parallel_thread_count=$PARALLEL_THREADS" -o "GSUtil:parallel_process_count=$PARALLEL_PROCESSES" -o "GSUtil:sliced_object_download_threshold=$SLICED_OBJECT_THRESHOLD" version > /dev/null
-    
     # Process each image
     for image in $images; do
         # Convert image name to a valid filename
         local safe_name=$(echo "$image" | tr '/:' '_-')
         local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
-        local gcs_path="gs://${GCS_BUCKET}/${safe_name}.tar"
         
-        echo_info "Downloading image: $image from $gcs_path"
+        echo_info "Processing image: $image"
         
         # Add image to status file
         jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" | sudo tee "$STATUS_FILE.tmp" > /dev/null
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        # Download the image using gsutil with parallel download
-        if gsutil -m -o "GSUtil:parallel_thread_count=$PARALLEL_THREADS" -o "GSUtil:parallel_process_count=$PARALLEL_PROCESSES" -o "GSUtil:sliced_object_download_threshold=$SLICED_OBJECT_THRESHOLD" cp "$gcs_path" "$tar_file"; then
+        # Get signed URL for the object
+        local signed_url
+        signed_url=$(get_signed_url "${safe_name}.tar")
+        
+        if [ $? -ne 0 ]; then
+            echo_error "Failed to get signed URL for image: $image"
+            ((failed++))
+            continue
+        fi
+        
+        echo_info "Downloading image: $image using aria2c"
+        
+        # Download the image using aria2c with parallel connections
+        if aria2c --file-allocation=none \
+                  --max-connection-per-server=$PARALLEL_CONNECTIONS \
+                  --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
+                  --min-split-size=$MIN_SPLIT_SIZE \
+                  --dir="$(dirname "$tar_file")" \
+                  --out="$(basename "$tar_file")" \
+                  "$signed_url"; then
             echo_success "Successfully downloaded image: $image"
             ((completed++))
         else
@@ -210,8 +230,13 @@ main() {
     # Initialize log file
     init_log_file
     
-    # Install GCS client
-    install_gcs_client
+    # Check for required tools
+    for cmd in curl jq aria2c; do
+        if ! command -v $cmd &>/dev/null; then
+            echo_error "Required tool '$cmd' is not installed. Please run oneshot.sh first."
+            exit 1
+        fi
+    done
     
     # Prepare staging directory
     prepare_staging_dir

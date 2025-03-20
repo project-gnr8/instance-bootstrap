@@ -88,6 +88,57 @@ echo_success() {
     printf "[%s] [SUCCESS] %s\n" "$timestamp" "$message" >> "$LOG_FILE"
 }
 
+# Install required packages for all scripts
+install_required_packages() {
+    echo_info "Installing required packages for all scripts"
+    
+    # Create a list of packages to install
+    local packages=(
+        git
+        curl
+        jq
+        aria2
+    )
+    
+    # Check which packages are already installed
+    local packages_to_install=()
+    for pkg in "${packages[@]}"; do
+        if ! command -v "$pkg" &>/dev/null; then
+            packages_to_install+=("$pkg")
+        else
+            echo_info "$pkg is already installed"
+        fi
+    done
+    
+    # Install missing packages if any
+    if [ ${#packages_to_install[@]} -gt 0 ]; then
+        echo_info "Installing packages: ${packages_to_install[*]}"
+        sudo apt-get update -y > /dev/null
+        sudo apt-get install -y "${packages_to_install[@]}" > /dev/null
+        
+        # Verify installation
+        local failed=0
+        for pkg in "${packages_to_install[@]}"; do
+            if ! command -v "$pkg" &>/dev/null; then
+                echo_error "Failed to install $pkg"
+                failed=1
+            else
+                echo_success "$pkg installed successfully"
+            fi
+        done
+        
+        if [ $failed -eq 1 ]; then
+            echo_error "Some packages failed to install"
+            return 1
+        fi
+    else
+        echo_info "All required packages are already installed"
+    fi
+    
+    echo_success "Package installation completed"
+    return 0
+}
+
 # Check if service is already running or has completed
 check_service_status() {
     # Get detailed status information without hanging
@@ -176,18 +227,18 @@ download_file() {
         sudo mkdir -p "$dir"
     fi
     
-    # Download the file
-    if [[ "$url" == gs://* ]]; then
-        # GCS URL
-        if ! command -v gsutil &> /dev/null; then
-            echo_info "gsutil not found. Installing Google Cloud SDK..."
-            curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir=/tmp/google-cloud-sdk > /dev/null
-            export PATH=$PATH:/tmp/google-cloud-sdk/bin
-        fi
-        sudo gsutil cp "$url" "$destination"
-    else
-        # HTTP/HTTPS URL
+    # Download the file using appropriate method based on URL type
+    if [[ "$url" == http://* ]] || [[ "$url" == https://* ]]; then
+        # Standard HTTP/HTTPS URL - use curl
         sudo curl -sSL "$url" -o "$destination"
+    else
+        # For all other URLs (including gs:// URLs), use aria2c for better performance
+        echo_info "Using aria2c for download"
+        aria2c --file-allocation=none \
+               --max-connection-per-server=16 \
+               --dir="$(dirname "$destination")" \
+               --out="$(basename "$destination")" \
+               "$url"
     fi
     
     # Set permissions
@@ -208,13 +259,6 @@ clone_and_stage_scripts() {
     fi
     
     echo_info "Cloning repository from $repo_url (branch: $branch)"
-    
-    # Install git if not available
-    if ! command -v git &>/dev/null; then
-        echo_info "Git not found. Installing..."
-        sudo apt-get update -y > /dev/null
-        sudo apt-get install -y git > /dev/null
-    fi
     
     # Remove existing directory if it exists to ensure clean clone
     if [ -d "$SCRIPTS_DIR" ]; then
@@ -363,6 +407,9 @@ main() {
     echo_info "GCS Bucket: $GCS_BUCKET"
     echo_info "Repository URL: $REPO_URL"
     echo_info "Repository Branch: $REPO_BRANCH"
+    
+    # Install required packages first
+    install_required_packages || echo_error "Some packages failed to install, but continuing"
     
     # Clone repository and stage scripts if URL is provided
     if [ -n "$REPO_URL" ]; then
