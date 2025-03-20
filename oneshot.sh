@@ -93,50 +93,38 @@ echo_success() {
 install_required_packages() {
     echo_info "Installing required packages for all scripts"
     
-    # Create a list of packages to install
-    local packages=(
-        git
-        curl
-        jq
-        aria2
+    # Define packages and their corresponding commands
+    declare -A pkg_commands=(
+        ["git"]="git"
+        ["curl"]="curl"
+        ["jq"]="jq"
+        ["aria2"]="aria2c"
     )
     
     # Check which packages are already installed
     local packages_to_install=()
-    for pkg in "${packages[@]}"; do
-        if ! command -v "$pkg" &>/dev/null; then
+    for pkg in "${!pkg_commands[@]}"; do
+        if ! command -v "${pkg_commands[$pkg]}" &>/dev/null; then
             packages_to_install+=("$pkg")
         else
-            echo_info "$pkg is already installed"
+            echo_info "${pkg_commands[$pkg]} is already installed"
         fi
     done
     
     # Install missing packages if any
     if [ ${#packages_to_install[@]} -gt 0 ]; then
         echo_info "Installing packages: ${packages_to_install[*]}"
-        sudo apt-get update -y > /dev/null
-        sudo apt-get install -y "${packages_to_install[@]}" > /dev/null
-        
-        # Verify installation
-        local failed=0
-        for pkg in "${packages_to_install[@]}"; do
-            if ! command -v "$pkg" &>/dev/null; then
-                echo_error "Failed to install $pkg"
-                failed=1
-            else
-                echo_success "$pkg installed successfully"
-            fi
-        done
-        
-        if [ $failed -eq 1 ]; then
-            echo_error "Some packages failed to install"
+        if sudo apt-get update -y > /dev/null && 
+           sudo apt-get install -y "${packages_to_install[@]}" > /dev/null; then
+            echo_success "Package installation completed successfully"
+        else
+            echo_error "Failed to install some packages"
             return 1
         fi
     else
         echo_info "All required packages are already installed"
     fi
     
-    echo_success "Package installation completed"
     return 0
 }
 
