@@ -24,6 +24,14 @@ PARALLEL_DOWNLOADS=8
 # Set higher sliced download threshold for large files (50MB)
 MIN_SPLIT_SIZE="50M"
 
+# Image name to GCS object mapping
+# This maps Docker image names to their corresponding GCS object names
+declare -A IMAGE_TO_OBJECT_MAP
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]="rapidsai-notebooks-24-12.tar"
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/clara/clara-parabricks:4.4.0-1"]="clara-parabricks-4-4-0.tar"
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/nemo:24.12"]="nvidia-nemo-24-12.tar"
+IMAGE_TO_OBJECT_MAP["egalinkin/demo"]="egalinkin-demo.tar"
+
 # Initialize log file
 init_log_file() {
     local log_dir=$(dirname "$LOG_FILE")
@@ -155,6 +163,24 @@ get_signed_url() {
     return 0
 }
 
+# Get object name for an image using the mapping
+get_object_name() {
+    local image=$1
+    local object_name=""
+    
+    # Check if image exists in the mapping
+    if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
+        object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
+        echo_info "Using mapped object name for $image: $object_name"
+    else
+        # Fallback to the default naming convention if not in the mapping
+        object_name=$(echo "$image" | tr '/:' '_-').tar
+        echo_info "No mapping found for $image, using default name: $object_name"
+    fi
+    
+    echo "$object_name"
+}
+
 # Download images using aria2c with parallel processing
 download_images() {
     echo_info "Starting Docker image downloads using signed URLs"
@@ -170,11 +196,14 @@ download_images() {
     
     # Process each image
     for image in $images; do
-        # Convert image name to a valid filename
+        # Get the appropriate object name from the mapping
+        local object_name=$(get_object_name "$image")
+        
+        # Use the same safe_name for the local file
         local safe_name=$(echo "$image" | tr '/:' '_-')
         local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
         
-        echo_info "Processing image: $image"
+        echo_info "Processing image: $image (object: $object_name)"
         
         # Add image to status file
         jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" | sudo tee "$STATUS_FILE.tmp" > /dev/null
@@ -182,10 +211,10 @@ download_images() {
         
         # Get signed URL for the object
         local signed_url
-        signed_url=$(get_signed_url "${safe_name}.tar")
+        signed_url=$(get_signed_url "$object_name")
         
         if [ $? -ne 0 ]; then
-            echo_error "Failed to get signed URL for image: $image"
+            echo_error "Failed to get signed URL for image: $image (object: $object_name)"
             ((failed++))
             continue
         fi

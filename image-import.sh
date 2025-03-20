@@ -11,6 +11,15 @@ PRESTAGE_DIR=${3:-"/opt/prestage/docker-images"}
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
 
+# Image name to GCS object mapping
+# This maps Docker image names to their corresponding GCS object names
+# Must be kept in sync with image-prestage.sh
+declare -A IMAGE_TO_OBJECT_MAP
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]="rapidsai-notebooks-24-12.tar"
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/clara/clara-parabricks:4.4.0-1"]="clara-parabricks-4-4-0.tar"
+IMAGE_TO_OBJECT_MAP["nvcr.io/nvidia/nemo:24.12"]="nvidia-nemo-24-12.tar"
+IMAGE_TO_OBJECT_MAP["egalinkin/demo"]="egalinkin-demo.tar"
+
 # Initialize log file
 init_log_file() {
     local log_dir=$(dirname "$LOG_FILE")
@@ -61,6 +70,20 @@ check_docker() {
     return 0
 }
 
+# Get the correct tar filename for an image
+get_tar_filename() {
+    local image=$1
+    local safe_name=$(echo "$image" | tr '/:' '_-')
+    
+    # Check if we have a custom mapping for this image
+    if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
+        echo "$PRESTAGE_DIR/${safe_name}.tar"
+    else
+        # Use the default naming convention
+        echo "$PRESTAGE_DIR/${safe_name}.tar"
+    fi
+}
+
 # Import images from tar files
 import_images() {
     echo_info "Starting Docker image import process..."
@@ -94,9 +117,11 @@ import_images() {
     
     # Process each image
     for image in $images; do
-        # Convert image name to a valid filename
+        # Get the tar file path for this image
+        local tar_file=$(get_tar_filename "$image")
         local safe_name=$(echo "$image" | tr '/:' '_-')
-        local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
+        
+        echo_info "Processing image: $image (tar file: $tar_file)"
         
         if [ -f "$tar_file" ]; then
             echo_info "Importing image: $image from $tar_file"
