@@ -6,7 +6,7 @@ set -euo pipefail
 # Parse command line arguments
 INST_USER=$1
 IMAGE_LIST_JSON=$2
-GCS_BUCKET=${3:-"docker-images-prestage"}
+GCS_BUCKET=${3:-"brev-image-prestage"}
 
 # Define constants and paths
 PRESTAGE_DIR="/opt/prestage/docker-images"
