@@ -252,6 +252,32 @@ download_images() {
     fi
 }
 
+# Check for required tools
+check_required_tools() {
+    echo_info "Checking for required tools..."
+    
+    # Define required commands
+    local required_commands=("curl" "jq" "aria2c")
+    local missing_commands=()
+    
+    # Check each command
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    # Report missing commands
+    if [ ${#missing_commands[@]} -gt 0 ]; then
+        echo_error "Missing required tools: ${missing_commands[*]}"
+        echo_error "Please run oneshot.sh first to install required dependencies."
+        return 1
+    fi
+    
+    echo_info "All required tools are available"
+    return 0
+}
+
 # Main function
 main() {
     echo_info "Starting Docker image prestaging process"
@@ -260,12 +286,7 @@ main() {
     init_log_file
     
     # Check for required tools
-    for cmd in curl jq aria2c; do
-        if ! command -v $cmd &>/dev/null; then
-            echo_error "Required tool '$cmd' is not installed. Please run oneshot.sh first."
-            exit 1
-        fi
-    done
+    check_required_tools || exit 1
     
     # Prepare staging directory
     prepare_staging_dir
