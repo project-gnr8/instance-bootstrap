@@ -11,10 +11,11 @@ INST_METRICS_VARS="$3"
 # Pass the image list as a JSON string
 IMAGE_LIST_JSON=${4:-'["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]'}
 # GCS bucket for image storage
-GCS_BUCKET=${5:-"docker-images-prestage"}
+GCS_BUCKET=${5:-"brev-image-prestage"}
 # Repository URL and branch for cloning
-REPO_URL=${6:-"https://github.com/project-gnr8/instance-bootstrap.git"}
-REPO_BRANCH=${7:-"main"}
+REPO_BRANCH=${6:-"main"}
+REPO_URL="https://github.com/project-gnr8/instance-bootstrap.git"
+
 
 # Define constants
 SERVICE_NAME="instance-oneshot"
