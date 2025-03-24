@@ -201,24 +201,44 @@ get_signed_url() {
     
     # Prepare request payload
     local payload="{\"object\":\"$object_name\",\"expiration\":$expiration,\"method\":\"GET\"}"
+    echo_info "Request payload: $payload"
     
-    # Make request to signed URL service
-    local response
-    response=$(curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
-                   -H "Content-Type: application/json" \
-                   -d "$payload")
+    # Create temp files for response headers and body
+    local headers_file=$(mktemp)
+    local response_file=$(mktemp)
+    
+    echo_info "Making request to signed URL service: $SIGNED_URL_SERVICE/generate-signed-url"
+    
+    # Make request to signed URL service with verbose output
+    local curl_exit_code
+    curl -v -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        -D "$headers_file" \
+        -o "$response_file"
+    curl_exit_code=$?
+    
+    # Log headers and response
+    echo_info "HTTP Response Headers:"
+    cat "$headers_file" | while read line; do echo_info "  $line"; done
+    
+    echo_info "HTTP Response Body:"
+    cat "$response_file" | while read line; do echo_info "  $line"; done
     
     # Check if request was successful
-    if [ $? -ne 0 ]; then
-        echo_error "Failed to get signed URL for object: $object_name"
+    if [ $curl_exit_code -ne 0 ]; then
+        echo_error "curl failed with exit code: $curl_exit_code"
+        rm -f "$headers_file" "$response_file"
         return 1
     fi
     
     # Extract signed URL from response
+    local response=$(cat "$response_file")
     local signed_url=$(echo "$response" | jq -r '.signed_url')
     
     if [ -z "$signed_url" ] || [ "$signed_url" = "null" ]; then
         echo_error "Invalid response from signed URL service: $response"
+        rm -f "$headers_file" "$response_file"
         return 1
     fi
     
@@ -226,9 +246,15 @@ get_signed_url() {
     signed_url="${signed_url//[$'\n\r ']}"
     
     # Decode the URL to ensure it's properly formatted
-    signed_url=$(url_decode "$signed_url")
+    local decoded_url=$(url_decode "$signed_url")
     
-    echo "$signed_url"
+    echo_info "Original signed URL: $signed_url"
+    echo_info "Decoded signed URL: $decoded_url"
+    
+    # Clean up temp files
+    rm -f "$headers_file" "$response_file"
+    
+    echo "$decoded_url"
     return 0
 }
 
@@ -298,9 +324,11 @@ download_images() {
             continue
         fi
         
-        # Decode the URL to ensure it's properly formatted for aria2c
-        local decoded_url=$(url_decode "$signed_url")
         echo_info "Downloading image: $image using aria2c"
+        
+        # Test URL with curl first to check for errors
+        echo_info "Testing URL with curl -I to check for errors:"
+        curl -I "$signed_url" 2>&1 | while read line; do echo_info "  $line"; done
         
         # Record start time
         local start_time=$(date +%s.%N)
@@ -310,6 +338,7 @@ download_images() {
         local download_method="unknown"
         
         # First attempt: Try aria2c with direct URL (decoded)
+        echo_info "Attempting download with aria2c..."
         if aria2c --file-allocation=none \
                   --max-connection-per-server=$PARALLEL_CONNECTIONS \
                   --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
@@ -317,23 +346,24 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  "$decoded_url"; then
+                  --console-log-level=debug \
+                  "$signed_url" 2>&1 | while read line; do echo_info "  aria2c: $line"; done; then
             download_success=true
             download_method="aria2c_direct"
             echo_info "Successfully downloaded with aria2c direct URL"
         else
             echo_info "aria2c direct URL failed, trying with curl as fallback..."
             
-            # Second attempt: Try curl as fallback
-            if curl -L -s -o "$tar_file" "$decoded_url"; then
+            # Second attempt: Try curl as fallback with verbose output
+            if curl -v -L -o "$tar_file" "$signed_url" 2>&1 | while read line; do echo_info "  curl: $line"; done; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
             else
                 echo_info "curl failed, trying with wget as final fallback..."
                 
-                # Third attempt: Try wget as final fallback
-                if wget -q --no-check-certificate -O "$tar_file" "$decoded_url"; then
+                # Third attempt: Try wget as final fallback with verbose output
+                if wget -v --no-check-certificate -O "$tar_file" "$signed_url" 2>&1 | while read line; do echo_info "  wget: $line"; done; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
