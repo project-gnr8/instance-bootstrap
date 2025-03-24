@@ -114,13 +114,15 @@ check_docker() {
 # Get the correct tar filename for an image
 get_tar_filename() {
     local image=$1
-    local safe_name=$(echo "$image" | tr '/:' '_-')
     
     # Check if we have a custom mapping for this image
     if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
-        echo "$PRESTAGE_DIR/${safe_name}.tar"
+        # Use the object name directly as the filename
+        local object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
+        echo "$PRESTAGE_DIR/$object_name"
     else
-        # Use the default naming convention
+        # Fallback to the default naming convention
+        local safe_name=$(echo "$image" | tr '/:' '_-')
         echo "$PRESTAGE_DIR/${safe_name}.tar"
     fi
 }

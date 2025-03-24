@@ -185,15 +185,14 @@ get_signed_url() {
     local object_name=$1
     local expiration=${2:-3600}
     
-    echo_info "Requesting signed URL for object: $object_name"
-    
     # Prepare request payload
     local payload="{\"object\":\"$object_name\",\"expiration\":$expiration,\"method\":\"GET\"}"
     
     # Create a temporary file for the response
     local response_file=$(mktemp)
     
-    # Make request to signed URL service with verbose output for debugging
+    # Make request to signed URL service
+    echo_info "Requesting signed URL for object: $object_name"
     curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
         -H "Content-Type: application/json" \
         -d "$payload" > "$response_file" 2>"$PRESTAGE_DIR/curl_request_${object_name//\//_}.log"
@@ -266,6 +265,8 @@ download_images() {
         
         # Get signed URL for the object and save to a file
         local url_file="$PRESTAGE_DIR/url_${safe_name}.txt"
+        
+        # Capture just the URL without any log messages
         local signed_url=$(get_signed_url "$object_name")
         
         if [ $? -ne 0 ] || [ -z "$signed_url" ]; then
@@ -274,7 +275,7 @@ download_images() {
             continue
         fi
         
-        # Save the clean URL to a file for aria2c (one URL per line)
+        # Save ONLY the URL to the file, nothing else
         echo "$signed_url" > "$url_file"
         
         # Record start time
@@ -302,9 +303,9 @@ download_images() {
             echo_error "aria2c failed, error:"
             cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
             
-            # Second attempt: Try curl as fallback
+            # Second attempt: Try curl as fallback with the URL directly from the file
             echo_info "Trying with curl as fallback..."
-            if curl -L -o "$tar_file" -s --url "$(cat "$url_file")" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
+            if curl -L -o "$tar_file" "$(cat "$url_file")" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
@@ -315,7 +316,7 @@ download_images() {
                 
                 # Third attempt: Try wget as final fallback
                 echo_info "Trying with wget as final fallback..."
-                if wget --no-check-certificate -O "$tar_file" -i "$url_file" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
+                if wget --no-check-certificate -O "$tar_file" "$(cat "$url_file")" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
