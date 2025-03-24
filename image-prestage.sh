@@ -191,11 +191,11 @@ get_signed_url() {
     # Create a temporary file for the response
     local response_file=$(mktemp)
     
-    # Make request to signed URL service
-    echo_info "Requesting signed URL for object: $object_name"
+    # Make request to signed URL service - SILENTLY
     curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
         -H "Content-Type: application/json" \
-        -d "$payload" > "$response_file" 2>"$PRESTAGE_DIR/curl_request_${object_name//\//_}.log"
+        -d "$payload" \
+        -o "$response_file" 2>"$PRESTAGE_DIR/curl_request_${object_name//\//_}.log"
     
     local curl_status=$?
     if [ $curl_status -ne 0 ]; then
@@ -220,7 +220,7 @@ get_signed_url() {
     # Clean the URL - remove any newlines, carriage returns, or extra spaces
     signed_url="${signed_url//[$'\n\r ']}"
     
-    echo_info "Successfully obtained signed URL for object: $object_name"
+    # Return ONLY the URL, nothing else
     echo "$signed_url"
     return 0
 }
@@ -249,9 +249,8 @@ download_images() {
         # Get the appropriate object name from the mapping
         local object_name=$(get_object_name "$image")
         
-        # Use the same safe_name for the local file
-        local safe_name=$(echo "$image" | tr '/:' '_-')
-        local tar_file="$PRESTAGE_DIR/${safe_name}.tar"
+        # Use the object name for the local file
+        local tar_file="$PRESTAGE_DIR/${object_name}"
         
         echo_info "Processing image: $image (object: $object_name)"
         
@@ -263,10 +262,13 @@ download_images() {
         fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        # Get signed URL for the object
+        # Get signed URL for the object - SILENTLY
+        echo_info "Requesting signed URL for object: $object_name"
         local signed_url=$(get_signed_url "$object_name")
+        local url_status=$?
+        echo_info "Successfully obtained signed URL for object: $object_name"
         
-        if [ $? -ne 0 ] || [ -z "$signed_url" ]; then
+        if [ $url_status -ne 0 ] || [ -z "$signed_url" ]; then
             echo_error "Failed to get signed URL for image: $image (object: $object_name)"
             ((failed++))
             continue
@@ -288,41 +290,41 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  "$signed_url" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
+                  "$signed_url" 2>"$PRESTAGE_DIR/aria2c_error_${object_name//\//_}.log"; then
             download_success=true
             download_method="aria2c"
             echo_info "Successfully downloaded with aria2c"
         else
             # Log aria2c error
             echo_error "aria2c failed, error:"
-            cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
+            cat "$PRESTAGE_DIR/aria2c_error_${object_name//\//_}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
             
             # Second attempt: Try curl as fallback
             echo_info "Trying with curl as fallback..."
-            if curl -L -o "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
+            if curl -L -o "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/curl_error_${object_name//\//_}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
             else
                 # Log curl error
                 echo_error "curl failed, error:"
-                cat "$PRESTAGE_DIR/curl_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
+                cat "$PRESTAGE_DIR/curl_error_${object_name//\//_}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
                 
                 # Third attempt: Try wget as final fallback
                 echo_info "Trying with wget as final fallback..."
-                if wget --no-check-certificate -O "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
+                if wget --no-check-certificate -O "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/wget_error_${object_name//\//_}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
                 else
                     # Log wget error
                     echo_error "wget failed, error:"
-                    cat "$PRESTAGE_DIR/wget_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
+                    cat "$PRESTAGE_DIR/wget_error_${object_name//\//_}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
                     
                     # Final diagnostic: HTTP HEAD request
                     echo_info "Performing HTTP HEAD request to debug..."
-                    curl -I "$signed_url" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
-                    echo_info "HTTP HEAD response saved to $PRESTAGE_DIR/curl_head_${safe_name}.log"
+                    curl -I "$signed_url" > "$PRESTAGE_DIR/curl_head_${object_name//\//_}.log" 2>&1
+                    echo_info "HTTP HEAD response saved to $PRESTAGE_DIR/curl_head_${object_name//\//_}.log"
                 fi
             fi
         fi
@@ -431,19 +433,15 @@ check_required_tools() {
 # Get object name for an image using the mapping
 get_object_name() {
     local image=$1
-    local object_name=""
     
-    # Check if image exists in the mapping
+    # Check if we have a custom mapping for this image
     if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
-        object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
-        echo_info "Using mapped object name for $image: $object_name" >&2
+        echo "${IMAGE_TO_OBJECT_MAP[$image]}"
     else
-        # Fallback to the default naming convention if not in the mapping
-        object_name=$(echo "$image" | tr '/:' '_-').tar
-        echo_info "No mapping found for $image, using default name: $object_name" >&2
+        # Use the default naming convention
+        local safe_name=$(echo "$image" | tr '/:' '_-')
+        echo "${safe_name}.tar"
     fi
-    
-    echo "$object_name"
 }
 
 # Main function
