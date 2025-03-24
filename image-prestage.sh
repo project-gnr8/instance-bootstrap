@@ -192,6 +192,16 @@ url_decode() {
     echo "$url"
 }
 
+# Sanitize URL for command line use
+sanitize_url() {
+    local url="$1"
+    # Remove any log lines that might have been captured in the URL
+    url=$(echo "$url" | grep -o 'https://storage.googleapis.com.*')
+    # Remove any newlines, carriage returns, or extra spaces
+    url="${url//[$'\n\r ']}"
+    echo "$url"
+}
+
 # Get signed URL from GCS signed URL service
 get_signed_url() {
     local object_name=$1
@@ -202,28 +212,36 @@ get_signed_url() {
     # Prepare request payload
     local payload="{\"object\":\"$object_name\",\"expiration\":$expiration,\"method\":\"GET\"}"
     
-    # Make request to signed URL service
-    local response
-    response=$(curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
-                   -H "Content-Type: application/json" \
-                   -d "$payload")
+    # Create a temporary file for the response
+    local response_file=$(mktemp)
     
-    # Check if request was successful
-    if [ $? -ne 0 ]; then
-        echo_error "Failed to get signed URL for object: $object_name"
+    # Make request to signed URL service with verbose output for debugging
+    curl -v -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
+        -H "Content-Type: application/json" \
+        -d "$payload" > "$response_file" 2>"$PRESTAGE_DIR/curl_request_${object_name//\//_}.log"
+    
+    local curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        echo_error "Failed to get signed URL for object: $object_name (curl exit code: $curl_status)"
+        cat "$PRESTAGE_DIR/curl_request_${object_name//\//_}.log" >> "$PRESTAGE_DIR/error_log.txt"
+        rm -f "$response_file"
         return 1
     fi
+    
+    # Log the response for debugging
+    cat "$response_file" > "$PRESTAGE_DIR/signed_url_response_${object_name//\//_}.json"
     
     # Extract signed URL from response
-    local signed_url=$(echo "$response" | jq -r '.signed_url')
+    local signed_url=$(jq -r '.signed_url' "$response_file")
+    rm -f "$response_file"
     
     if [ -z "$signed_url" ] || [ "$signed_url" = "null" ]; then
-        echo_error "Invalid response from signed URL service: $response"
+        echo_error "Invalid response from signed URL service for object: $object_name"
         return 1
     fi
     
-    # Clean the URL - remove any newlines, carriage returns, or extra spaces
-    signed_url="${signed_url//[$'\n\r ']}"
+    # Sanitize the URL to ensure it's clean
+    signed_url=$(sanitize_url "$signed_url")
     
     echo_info "Successfully obtained signed URL for object: $object_name"
     echo "$signed_url"
@@ -268,31 +286,18 @@ download_images() {
         fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        # Get signed URL for the object
-        local signed_url
-        signed_url=$(get_signed_url "$object_name")
+        # Get signed URL for the object and save to a file
+        local url_file="$PRESTAGE_DIR/url_${safe_name}.txt"
+        local signed_url=$(get_signed_url "$object_name")
         
-        if [ $? -ne 0 ]; then
+        if [ $? -ne 0 ] || [ -z "$signed_url" ]; then
             echo_error "Failed to get signed URL for image: $image (object: $object_name)"
             ((failed++))
             continue
         fi
         
-        # Decode the URL to ensure it's properly formatted for aria2c
-        local decoded_url=$(url_decode "$signed_url")
-        
-        # Save URL to a file for inspection
-        local url_debug_file="$PRESTAGE_DIR/url_debug_${safe_name}.txt"
-        echo "Original URL: $signed_url" > "$url_debug_file"
-        echo "Decoded URL: $decoded_url" >> "$url_debug_file"
-        
-        echo_info "Downloading image: $image using aria2c"
-        
-        # Test URL with curl first to check for errors
-        echo_info "Testing URL with curl..."
-        local curl_test_output=$(curl -sS -I "$decoded_url" 2>&1)
-        echo "$curl_test_output" >> "$url_debug_file"
-        echo_info "Curl test output saved to $url_debug_file"
+        # Save the URL to a file for aria2c (one URL per line)
+        echo "$signed_url" > "$url_file"
         
         # Record start time
         local start_time=$(date +%s.%N)
@@ -301,8 +306,8 @@ download_images() {
         local download_success=false
         local download_method="unknown"
         
-        # First attempt: Try aria2c with direct URL (decoded)
-        echo_info "Attempting download with aria2c..."
+        # First attempt: Try aria2c with input file (most reliable for complex URLs)
+        echo_info "Attempting download with aria2c using input file..."
         if aria2c --file-allocation=none \
                   --max-connection-per-server=$PARALLEL_CONNECTIONS \
                   --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
@@ -310,38 +315,41 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  "$decoded_url" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
+                  --input-file="$url_file" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
             download_success=true
-            download_method="aria2c_direct"
-            echo_info "Successfully downloaded with aria2c direct URL"
+            download_method="aria2c_input_file"
+            echo_info "Successfully downloaded with aria2c input file"
         else
             # Log aria2c error
-            echo_error "aria2c failed with error:"
-            cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
+            echo_error "aria2c with input file failed, error:"
+            cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
             
-            echo_info "aria2c direct URL failed, trying with curl as fallback..."
-            
-            # Second attempt: Try curl as fallback
-            if curl -L -o "$tar_file" "$decoded_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
+            # Second attempt: Try curl with direct URL
+            echo_info "Trying with curl as fallback..."
+            if curl -L -o "$tar_file" -v "$signed_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
             else
                 # Log curl error
-                echo_error "curl failed with error:"
-                cat "$PRESTAGE_DIR/curl_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
-                
-                echo_info "curl failed, trying with wget as final fallback..."
+                echo_error "curl failed, error:"
+                cat "$PRESTAGE_DIR/curl_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
                 
                 # Third attempt: Try wget as final fallback
-                if wget --no-check-certificate -O "$tar_file" "$decoded_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
+                echo_info "Trying with wget as final fallback..."
+                if wget --no-check-certificate -O "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
                 else
                     # Log wget error
-                    echo_error "wget failed with error:"
-                    cat "$PRESTAGE_DIR/wget_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
+                    echo_error "wget failed, error:"
+                    cat "$PRESTAGE_DIR/wget_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
+                    
+                    # Final attempt: Try a simple HTTP request with curl to debug
+                    echo_info "Trying a simple HTTP HEAD request to debug..."
+                    curl -I "$signed_url" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
+                    echo_info "HTTP HEAD response saved to $PRESTAGE_DIR/curl_head_${safe_name}.log"
                 fi
             fi
         fi
@@ -389,6 +397,9 @@ download_images() {
             echo_error "Failed to download image: $image after multiple attempts"
             ((failed++))
         fi
+        
+        # Clean up
+        rm -f "$url_file"
         
         # Update status file
         update_status "downloading" $completed $total
