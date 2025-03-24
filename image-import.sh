@@ -7,6 +7,7 @@ set -euo pipefail
 INST_USER=$1
 STATUS_FILE=${2:-"/opt/prestage/docker-images-prestage-status.json"}
 PRESTAGE_DIR=${3:-"/opt/prestage/docker-images"}
+FORCE_IMPORT=${4:-"false"}
 
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
@@ -143,11 +144,16 @@ import_images() {
         return 1
     fi
     
-    # Check status
-    local status=$(jq -r '.status' "$STATUS_FILE" 2>/dev/null || echo "unknown")
-    if [ "$status" != "completed" ] && [ "$status" != "completed_with_errors" ]; then
-        echo_error "Image prestaging not completed. Current status: $status"
-        return 1
+    # Check status unless force flag is set
+    if [ "$FORCE_IMPORT" != "true" ]; then
+        local status=$(jq -r '.status' "$STATUS_FILE" 2>/dev/null || echo "unknown")
+        if [ "$status" != "completed" ] && [ "$status" != "completed_with_errors" ]; then
+            echo_error "Image prestaging not completed. Current status: $status"
+            echo_info "Use force flag (4th argument) to bypass this check for testing"
+            return 1
+        fi
+    else
+        echo_info "Force flag set - bypassing status check"
     fi
     
     # Get image list

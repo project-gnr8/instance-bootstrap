@@ -263,10 +263,7 @@ download_images() {
         fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        # Get signed URL for the object and save to a file
-        local url_file="$PRESTAGE_DIR/url_${safe_name}.txt"
-        
-        # Capture just the URL without any log messages
+        # Get signed URL for the object
         local signed_url=$(get_signed_url "$object_name")
         
         if [ $? -ne 0 ] || [ -z "$signed_url" ]; then
@@ -275,9 +272,6 @@ download_images() {
             continue
         fi
         
-        # Save ONLY the URL to the file, nothing else
-        echo "$signed_url" > "$url_file"
-        
         # Record start time
         local start_time=$(date +%s.%N)
         
@@ -285,8 +279,8 @@ download_images() {
         local download_success=false
         local download_method="unknown"
         
-        # First attempt: Try aria2c with input file
-        echo_info "Attempting download with aria2c using input file..."
+        # First attempt: Try aria2c
+        echo_info "Attempting download with aria2c..."
         if aria2c --file-allocation=none \
                   --max-connection-per-server=$PARALLEL_CONNECTIONS \
                   --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
@@ -294,7 +288,7 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  --input-file="$url_file" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
+                  "$signed_url" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
             download_success=true
             download_method="aria2c"
             echo_info "Successfully downloaded with aria2c"
@@ -303,9 +297,9 @@ download_images() {
             echo_error "aria2c failed, error:"
             cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | tee -a "$PRESTAGE_DIR/error_log.txt"
             
-            # Second attempt: Try curl as fallback with the URL directly from the file
+            # Second attempt: Try curl as fallback
             echo_info "Trying with curl as fallback..."
-            if curl -L -o "$tar_file" "$(cat "$url_file")" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
+            if curl -L -o "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
@@ -316,7 +310,7 @@ download_images() {
                 
                 # Third attempt: Try wget as final fallback
                 echo_info "Trying with wget as final fallback..."
-                if wget --no-check-certificate -O "$tar_file" "$(cat "$url_file")" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
+                if wget --no-check-certificate -O "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
@@ -327,7 +321,7 @@ download_images() {
                     
                     # Final diagnostic: HTTP HEAD request
                     echo_info "Performing HTTP HEAD request to debug..."
-                    curl -I "$(cat "$url_file")" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
+                    curl -I "$signed_url" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
                     echo_info "HTTP HEAD response saved to $PRESTAGE_DIR/curl_head_${safe_name}.log"
                 fi
             fi
@@ -337,48 +331,52 @@ download_images() {
         local end_time=$(date +%s.%N)
         local duration=$(echo "$end_time - $start_time" | bc)
         
+        # Get file size after download
+        local file_size_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo "0")
+        local file_size_human=$(get_file_size "$tar_file")
+        
+        # Calculate transfer rate
+        local transfer_rate=$(calculate_rate "$file_size_bytes" "$duration")
+        
         if [ "$download_success" = true ]; then
-            # Get file size in bytes for rate calculation
-            local file_size_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo "unknown")
-            local file_size_human=$(get_file_size "$tar_file")
-            local transfer_rate=$(calculate_rate "$file_size_bytes" "$duration")
-            
             # Log timing information
             echo_timing "download_${download_method}_$image" "$duration" "$file_size_human" "$transfer_rate"
             
             # Add to summary JSON
             jq --arg img "$image" \
-               --arg obj "$object_name" \
                --arg method "$download_method" \
                --arg duration "$duration" \
                --arg size "$file_size_human" \
                --arg rate "$transfer_rate" \
-               --argjson connections "$PARALLEL_CONNECTIONS" \
-               --argjson concurrent "$PARALLEL_DOWNLOADS" \
-               '.images += [{"image": $img, "object": $obj, "operation": "download", "method": $method, "duration": $duration, "size": $size, "rate": $rate, "connections": $connections, "concurrent_downloads": $concurrent}]' \
+               '.images += [{"image": $img, "method": $method, "duration": $duration, "size": $size, "rate": $rate}]' \
                "$summary_file" > "$summary_file.tmp" && sudo mv "$summary_file.tmp" "$summary_file"
             
-            echo_success "Successfully downloaded image: $image using $download_method"
+            echo_success "Successfully downloaded image: $image"
             ((completed++))
+            
+            # Update status file with completed count
+            update_status "downloading" $completed $total
+            
+            # If all downloads are complete, update status to completed or completed_with_errors
+            if [ $completed -eq $total ]; then
+                if [ $failed -gt 0 ]; then
+                    update_status "completed_with_errors" $completed $total
+                else
+                    update_status "completed" $completed $total
+                fi
+            fi
         else
-            # Log timing information for failed download
-            echo_timing "download_failed_$image" "$duration" "unknown" "unknown"
-            
-            # Add to summary JSON
-            jq --arg img "$image" \
-               --arg obj "$object_name" \
-               --arg duration "$duration" \
-               --argjson connections "$PARALLEL_CONNECTIONS" \
-               --argjson concurrent "$PARALLEL_DOWNLOADS" \
-               '.images += [{"image": $img, "object": $obj, "operation": "download_failed", "duration": $duration, "size": "unknown", "rate": "unknown", "connections": $connections, "concurrent_downloads": $concurrent}]' \
-               "$summary_file" > "$summary_file.tmp" && sudo mv "$summary_file.tmp" "$summary_file"
-            
-            echo_error "Failed to download image: $image after multiple attempts"
+            echo_error "Failed to download image: $image after all attempts"
             ((failed++))
+            
+            # Update status file with completed count
+            update_status "downloading" $completed $total
+            
+            # If all downloads are attempted, update status to completed_with_errors
+            if [ $((completed + failed)) -eq $total ]; then
+                update_status "completed_with_errors" $completed $total
+            fi
         fi
-        
-        # Update status file
-        update_status "downloading" $completed $total
     done
     
     # Add summary statistics to the summary file
