@@ -201,79 +201,33 @@ get_signed_url() {
     
     # Prepare request payload
     local payload="{\"object\":\"$object_name\",\"expiration\":$expiration,\"method\":\"GET\"}"
-    echo_info "Request payload: $payload"
     
-    # Create temp files for response headers and body
-    local headers_file=$(mktemp)
-    local response_file=$(mktemp)
-    
-    echo_info "Making request to signed URL service: $SIGNED_URL_SERVICE/generate-signed-url"
-    
-    # Make request to signed URL service with verbose output
-    local curl_exit_code
-    curl -v -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
-        -H "Content-Type: application/json" \
-        -d "$payload" \
-        -D "$headers_file" \
-        -o "$response_file"
-    curl_exit_code=$?
-    
-    # Log headers and response
-    echo_info "HTTP Response Headers:"
-    cat "$headers_file" | while read line; do echo_info "  $line"; done
-    
-    echo_info "HTTP Response Body:"
-    cat "$response_file" | while read line; do echo_info "  $line"; done
+    # Make request to signed URL service
+    local response
+    response=$(curl -s -X POST "$SIGNED_URL_SERVICE/generate-signed-url" \
+                   -H "Content-Type: application/json" \
+                   -d "$payload")
     
     # Check if request was successful
-    if [ $curl_exit_code -ne 0 ]; then
-        echo_error "curl failed with exit code: $curl_exit_code"
-        rm -f "$headers_file" "$response_file"
+    if [ $? -ne 0 ]; then
+        echo_error "Failed to get signed URL for object: $object_name"
         return 1
     fi
     
     # Extract signed URL from response
-    local response=$(cat "$response_file")
     local signed_url=$(echo "$response" | jq -r '.signed_url')
     
     if [ -z "$signed_url" ] || [ "$signed_url" = "null" ]; then
         echo_error "Invalid response from signed URL service: $response"
-        rm -f "$headers_file" "$response_file"
         return 1
     fi
     
     # Clean the URL - remove any newlines, carriage returns, or extra spaces
     signed_url="${signed_url//[$'\n\r ']}"
     
-    # Decode the URL to ensure it's properly formatted
-    local decoded_url=$(url_decode "$signed_url")
-    
-    echo_info "Original signed URL: $signed_url"
-    echo_info "Decoded signed URL: $decoded_url"
-    
-    # Clean up temp files
-    rm -f "$headers_file" "$response_file"
-    
-    echo "$decoded_url"
+    echo_info "Successfully obtained signed URL for object: $object_name"
+    echo "$signed_url"
     return 0
-}
-
-# Get object name for an image using the mapping
-get_object_name() {
-    local image=$1
-    local object_name=""
-    
-    # Check if image exists in the mapping
-    if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
-        object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
-        echo_info "Using mapped object name for $image: $object_name" >&2
-    else
-        # Fallback to the default naming convention if not in the mapping
-        object_name=$(echo "$image" | tr '/:' '_-').tar
-        echo_info "No mapping found for $image, using default name: $object_name" >&2
-    fi
-    
-    echo "$object_name"
 }
 
 # Download images using aria2c with parallel processing
@@ -324,11 +278,21 @@ download_images() {
             continue
         fi
         
+        # Decode the URL to ensure it's properly formatted for aria2c
+        local decoded_url=$(url_decode "$signed_url")
+        
+        # Save URL to a file for inspection
+        local url_debug_file="$PRESTAGE_DIR/url_debug_${safe_name}.txt"
+        echo "Original URL: $signed_url" > "$url_debug_file"
+        echo "Decoded URL: $decoded_url" >> "$url_debug_file"
+        
         echo_info "Downloading image: $image using aria2c"
         
         # Test URL with curl first to check for errors
-        echo_info "Testing URL with curl -I to check for errors:"
-        curl -I "$signed_url" 2>&1 | while read line; do echo_info "  $line"; done
+        echo_info "Testing URL with curl..."
+        local curl_test_output=$(curl -sS -I "$decoded_url" 2>&1)
+        echo "$curl_test_output" >> "$url_debug_file"
+        echo_info "Curl test output saved to $url_debug_file"
         
         # Record start time
         local start_time=$(date +%s.%N)
@@ -346,27 +310,38 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  --console-log-level=debug \
-                  "$signed_url" 2>&1 | while read line; do echo_info "  aria2c: $line"; done; then
+                  "$decoded_url" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
             download_success=true
             download_method="aria2c_direct"
             echo_info "Successfully downloaded with aria2c direct URL"
         else
+            # Log aria2c error
+            echo_error "aria2c failed with error:"
+            cat "$PRESTAGE_DIR/aria2c_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
+            
             echo_info "aria2c direct URL failed, trying with curl as fallback..."
             
-            # Second attempt: Try curl as fallback with verbose output
-            if curl -v -L -o "$tar_file" "$signed_url" 2>&1 | while read line; do echo_info "  curl: $line"; done; then
+            # Second attempt: Try curl as fallback
+            if curl -L -o "$tar_file" "$decoded_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
             else
+                # Log curl error
+                echo_error "curl failed with error:"
+                cat "$PRESTAGE_DIR/curl_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
+                
                 echo_info "curl failed, trying with wget as final fallback..."
                 
-                # Third attempt: Try wget as final fallback with verbose output
-                if wget -v --no-check-certificate -O "$tar_file" "$signed_url" 2>&1 | while read line; do echo_info "  wget: $line"; done; then
+                # Third attempt: Try wget as final fallback
+                if wget --no-check-certificate -O "$tar_file" "$decoded_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
+                else
+                    # Log wget error
+                    echo_error "wget failed with error:"
+                    cat "$PRESTAGE_DIR/wget_error_${safe_name}.log" | while read line; do echo_error "  $line"; done
                 fi
             fi
         fi
@@ -466,6 +441,24 @@ check_required_tools() {
     
     echo_info "All required tools are available"
     return 0
+}
+
+# Get object name for an image using the mapping
+get_object_name() {
+    local image=$1
+    local object_name=""
+    
+    # Check if image exists in the mapping
+    if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
+        object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
+        echo_info "Using mapped object name for $image: $object_name" >&2
+    else
+        # Fallback to the default naming convention if not in the mapping
+        object_name=$(echo "$image" | tr '/:' '_-').tar
+        echo_info "No mapping found for $image, using default name: $object_name" >&2
+    fi
+    
+    echo "$object_name"
 }
 
 # Main function
