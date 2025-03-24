@@ -180,22 +180,16 @@ update_status() {
     return 0
 }
 
-# URL encode function to properly handle special characters
-url_encode() {
-    local string="$1"
-    local strlen=${#string}
-    local encoded=""
-    local pos c o
-    
-    for (( pos=0 ; pos<strlen ; pos++ )); do
-        c=${string:$pos:1}
-        case "$c" in
-            [-_.~a-zA-Z0-9] ) o="${c}" ;;
-            * )               printf -v o '%%%02x' "'$c"
-        esac
-        encoded+="${o}"
-    done
-    echo "${encoded}"
+# URL decode function to handle encoded URLs
+url_decode() {
+    local url="$1"
+    # Replace %2F with / and other common URL encodings
+    url="${url//"%2F"/"/"}"
+    url="${url//"%3A"/":"}"
+    url="${url//"%3F"/"?"}"
+    url="${url//"%3D"/"="}"
+    url="${url//"%26"/"&"}"
+    echo "$url"
 }
 
 # Get signed URL from GCS signed URL service
@@ -230,6 +224,9 @@ get_signed_url() {
     
     # Clean the URL - remove any newlines, carriage returns, or extra spaces
     signed_url="${signed_url//[$'\n\r ']}"
+    
+    # Decode the URL to ensure it's properly formatted
+    signed_url=$(url_decode "$signed_url")
     
     echo "$signed_url"
     return 0
@@ -301,63 +298,45 @@ download_images() {
             continue
         fi
         
+        # Decode the URL to ensure it's properly formatted for aria2c
+        local decoded_url=$(url_decode "$signed_url")
         echo_info "Downloading image: $image using aria2c"
-        
-        # Create a temporary file to store the URL - ensure it's properly formatted
-        local url_file=$(mktemp)
-        echo "$signed_url" > "$url_file"
         
         # Record start time
         local start_time=$(date +%s.%N)
         
-        # Try using curl as a fallback if aria2c fails
+        # Try using different download methods
         local download_success=false
         local download_method="unknown"
         
-        # First attempt: Try wget (often handles URLs better than aria2c)
-        if wget -q --no-check-certificate -O "$tar_file" "$signed_url"; then
+        # First attempt: Try aria2c with direct URL (decoded)
+        if aria2c --file-allocation=none \
+                  --max-connection-per-server=$PARALLEL_CONNECTIONS \
+                  --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
+                  --min-split-size=$MIN_SPLIT_SIZE \
+                  --dir="$(dirname "$tar_file")" \
+                  --out="$(basename "$tar_file")" \
+                  --allow-overwrite=true \
+                  "$decoded_url"; then
             download_success=true
-            download_method="wget"
-            echo_info "Successfully downloaded with wget"
+            download_method="aria2c_direct"
+            echo_info "Successfully downloaded with aria2c direct URL"
         else
-            echo_info "wget failed, trying with curl..."
+            echo_info "aria2c direct URL failed, trying with curl as fallback..."
             
-            # Second attempt: Try curl
-            if curl -L -s -o "$tar_file" "$signed_url"; then
+            # Second attempt: Try curl as fallback
+            if curl -L -s -o "$tar_file" "$decoded_url"; then
                 download_success=true
                 download_method="curl"
-                echo_info "Successfully downloaded with curl"
+                echo_info "Successfully downloaded with curl fallback"
             else
-                echo_info "curl failed, trying with aria2c..."
+                echo_info "curl failed, trying with wget as final fallback..."
                 
-                # Third attempt: Try aria2c with direct URL
-                if aria2c --file-allocation=none \
-                          --max-connection-per-server=$PARALLEL_CONNECTIONS \
-                          --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
-                          --min-split-size=$MIN_SPLIT_SIZE \
-                          --dir="$(dirname "$tar_file")" \
-                          --out="$(basename "$tar_file")" \
-                          --allow-overwrite=true \
-                          "$signed_url" 2>/dev/null; then
+                # Third attempt: Try wget as final fallback
+                if wget -q --no-check-certificate -O "$tar_file" "$decoded_url"; then
                     download_success=true
-                    download_method="aria2c_direct"
-                    echo_info "Successfully downloaded with aria2c direct URL"
-                else
-                    echo_info "aria2c direct URL failed, trying with input file..."
-                    
-                    # Fourth attempt: Try aria2c with input file
-                    if aria2c --file-allocation=none \
-                              --max-connection-per-server=$PARALLEL_CONNECTIONS \
-                              --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
-                              --min-split-size=$MIN_SPLIT_SIZE \
-                              --dir="$(dirname "$tar_file")" \
-                              --out="$(basename "$tar_file")" \
-                              --allow-overwrite=true \
-                              --input-file="$url_file" 2>/dev/null; then
-                        download_success=true
-                        download_method="aria2c_input_file"
-                        echo_info "Successfully downloaded with aria2c input file"
-                    fi
+                    download_method="wget"
+                    echo_info "Successfully downloaded with wget fallback"
                 fi
             fi
         fi
@@ -405,9 +384,6 @@ download_images() {
             echo_error "Failed to download image: $image after multiple attempts"
             ((failed++))
         fi
-        
-        # Clean up the temporary URL file
-        rm -f "$url_file"
         
         # Update status file
         update_status "downloading" $completed $total
