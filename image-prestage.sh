@@ -165,6 +165,8 @@ update_status() {
     local completed=$2
     local total=$3
     
+    echo_info "Updating status file: status=$status, completed=$completed, total=$total"
+    
     # Use jq to properly update the status file with valid JSON
     if ! jq -n \
         --arg status "$status" \
@@ -172,11 +174,17 @@ update_status() {
         --argjson total "$total" \
         --argjson images "$(jq '.images' "$STATUS_FILE" 2>/dev/null || echo '[]')" \
         '{status: $status, completed: $completed, total: $total, images: $images}' > "$STATUS_FILE.tmp"; then
-        echo_error "Failed to update status file" >&2
+        echo_error "Failed to update status file"
         return 1
     fi
     
+    # Ensure proper permissions and ownership
     sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+    sudo chmod 644 "$STATUS_FILE"
+    sudo chown "$INST_USER":"$INST_USER" "$STATUS_FILE"
+    
+    # Verify the update
+    echo_info "Status file updated: $(cat "$STATUS_FILE" | jq -c .)"
     return 0
 }
 
