@@ -59,6 +59,47 @@ echo_success() {
     printf "[%s] [SUCCESS] %s\n" "$timestamp" "$1" >> "$LOG_FILE"
 }
 
+# Timing function to track operation duration
+echo_timing() {
+    local operation=$1
+    local duration=$2
+    local size=${3:-"unknown"}
+    local rate=${4:-"unknown"}
+    
+    local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
+    # Format for console with colors
+    printf "\033[1;36m[TIMING]\033[0m [%s] Operation: %s, Duration: %.2f seconds, Size: %s, Rate: %s\n" \
+        "$timestamp" "$operation" "$duration" "$size" "$rate" >&1
+    # Format for log file (without colors)
+    printf "[%s] [TIMING] Operation: %s, Duration: %.2f seconds, Size: %s, Rate: %s\n" \
+        "$timestamp" "$operation" "$duration" "$size" "$rate" >> "$LOG_FILE"
+}
+
+# Get file size in human-readable format
+get_file_size() {
+    local file=$1
+    if [ -f "$file" ]; then
+        du -h "$file" | cut -f1
+    else
+        echo "unknown"
+    fi
+}
+
+# Calculate transfer rate
+calculate_rate() {
+    local file_size=$1  # in bytes
+    local duration=$2   # in seconds
+    
+    if [ "$file_size" = "unknown" ] || [ "$duration" = "0" ]; then
+        echo "unknown"
+        return
+    fi
+    
+    # Calculate rate in MB/s
+    local rate=$(echo "scale=2; $file_size / 1024 / 1024 / $duration" | bc)
+    echo "${rate} MB/s"
+}
+
 # Check if Docker is running
 check_docker() {
     echo_info "Checking if Docker is running..."
@@ -115,6 +156,10 @@ import_images() {
     
     echo_info "Found $total images to import"
     
+    # Create a summary file for timing data
+    local summary_file="$PRESTAGE_DIR/import_timing_summary.json"
+    echo '{"images":[]}' > "$summary_file"
+    
     # Process each image
     for image in $images; do
         # Get the tar file path for this image
@@ -125,10 +170,50 @@ import_images() {
         
         if [ -f "$tar_file" ]; then
             echo_info "Importing image: $image from $tar_file"
+            
+            # Get file size before import
+            local file_size_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo "unknown")
+            local file_size_human=$(get_file_size "$tar_file")
+            
+            # Record start time
+            local start_time=$(date +%s.%N)
+            
             if docker load -i "$tar_file"; then
+                # Record end time and calculate duration
+                local end_time=$(date +%s.%N)
+                local duration=$(echo "$end_time - $start_time" | bc)
+                
+                # Calculate transfer rate
+                local transfer_rate=$(calculate_rate "$file_size_bytes" "$duration")
+                
+                # Log timing information
+                echo_timing "docker_load_$image" "$duration" "$file_size_human" "$transfer_rate"
+                
+                # Add to summary JSON
+                jq --arg img "$image" \
+                   --arg duration "$duration" \
+                   --arg size "$file_size_human" \
+                   --arg rate "$transfer_rate" \
+                   '.images += [{"image": $img, "operation": "docker_load", "duration": $duration, "size": $size, "rate": $rate}]' \
+                   "$summary_file" > "$summary_file.tmp" && mv "$summary_file.tmp" "$summary_file"
+                
                 echo_success "Successfully imported image: $image"
                 ((completed++))
             else
+                # Record end time and calculate duration even for failures
+                local end_time=$(date +%s.%N)
+                local duration=$(echo "$end_time - $start_time" | bc)
+                
+                # Log timing information for failed import
+                echo_timing "docker_load_failed_$image" "$duration" "$file_size_human" "unknown"
+                
+                # Add to summary JSON
+                jq --arg img "$image" \
+                   --arg duration "$duration" \
+                   --arg size "$file_size_human" \
+                   '.images += [{"image": $img, "operation": "docker_load_failed", "duration": $duration, "size": $size, "rate": "unknown"}]' \
+                   "$summary_file" > "$summary_file.tmp" && mv "$summary_file.tmp" "$summary_file"
+                
                 echo_error "Failed to import image: $image"
                 ((failed++))
             fi
@@ -137,6 +222,16 @@ import_images() {
             ((failed++))
         fi
     done
+    
+    # Add summary statistics to the summary file
+    jq --arg total "$total" \
+       --arg completed "$completed" \
+       --arg failed "$failed" \
+       --arg timestamp "$(date +"%Y-%m-%dT%H:%M:%S%z")" \
+       '. += {"summary": {"total": $total, "completed": $completed, "failed": $failed, "timestamp": $timestamp}}' \
+       "$summary_file" > "$summary_file.tmp" && mv "$summary_file.tmp" "$summary_file"
+    
+    echo_info "Timing summary saved to $summary_file"
     
     # Final status update
     if [ $failed -gt 0 ]; then

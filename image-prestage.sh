@@ -71,6 +71,44 @@ echo_success() {
     printf "[%s] [SUCCESS] %s\n" "$timestamp" "$1" >> "$LOG_FILE"
 }
 
+echo_timing() {
+    local operation=$1
+    local duration=$2
+    local size=${3:-"unknown"}
+    local rate=${4:-"unknown"}
+    
+    local timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")
+    # Format for console with colors
+    printf "\033[1;36m[TIMING]\033[0m [%s] Operation: %s, Duration: %.2f seconds, Size: %s, Rate: %s\n" \
+        "$timestamp" "$operation" "$duration" "$size" "$rate" >&1
+    # Format for log file (without colors)
+    printf "[%s] [TIMING] Operation: %s, Duration: %.2f seconds, Size: %s, Rate: %s\n" \
+        "$timestamp" "$operation" "$duration" "$size" "$rate" >> "$LOG_FILE"
+}
+
+get_file_size() {
+    local file=$1
+    if [ -f "$file" ]; then
+        du -h "$file" | cut -f1
+    else
+        echo "unknown"
+    fi
+}
+
+calculate_rate() {
+    local file_size=$1  # in bytes
+    local duration=$2   # in seconds
+    
+    if [ "$file_size" = "unknown" ] || [ "$duration" = "0" ]; then
+        echo "unknown"
+        return
+    fi
+    
+    # Calculate rate in MB/s
+    local rate=$(echo "scale=2; $file_size / 1024 / 1024 / $duration" | bc)
+    echo "${rate} MB/s"
+}
+
 # Prepare the staging directory
 prepare_staging_dir() {
     echo_info "Preparing image staging directory: $PRESTAGE_DIR"
@@ -142,6 +180,24 @@ update_status() {
     return 0
 }
 
+# URL encode function to properly handle special characters
+url_encode() {
+    local string="$1"
+    local strlen=${#string}
+    local encoded=""
+    local pos c o
+    
+    for (( pos=0 ; pos<strlen ; pos++ )); do
+        c=${string:$pos:1}
+        case "$c" in
+            [-_.~a-zA-Z0-9] ) o="${c}" ;;
+            * )               printf -v o '%%%02x' "'$c"
+        esac
+        encoded+="${o}"
+    done
+    echo "${encoded}"
+}
+
 # Get signed URL from GCS signed URL service
 get_signed_url() {
     local object_name=$1
@@ -210,6 +266,12 @@ download_images() {
     # Update status file with total count
     update_status "downloading" $completed $total
     
+    # Create a summary file for timing data
+    local summary_file="$PRESTAGE_DIR/download_timing_summary.json"
+    echo '{"images":[]}' > "$summary_file"
+    sudo chmod 644 "$summary_file"
+    sudo chown "$INST_USER":"$INST_USER" "$summary_file"
+    
     # Process each image
     for image in $images; do
         # Get the appropriate object name from the mapping
@@ -241,22 +303,106 @@ download_images() {
         
         echo_info "Downloading image: $image using aria2c"
         
-        # Create a temporary file to store the URL
+        # Create a temporary file to store the URL - ensure it's properly formatted
         local url_file=$(mktemp)
         echo "$signed_url" > "$url_file"
         
-        # Download the image using aria2c with parallel connections
-        if aria2c --file-allocation=none \
-                  --max-connection-per-server=$PARALLEL_CONNECTIONS \
-                  --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
-                  --min-split-size=$MIN_SPLIT_SIZE \
-                  --dir="$(dirname "$tar_file")" \
-                  --out="$(basename "$tar_file")" \
-                  --input-file="$url_file"; then
-            echo_success "Successfully downloaded image: $image"
+        # Record start time
+        local start_time=$(date +%s.%N)
+        
+        # Try using curl as a fallback if aria2c fails
+        local download_success=false
+        local download_method="unknown"
+        
+        # First attempt: Try wget (often handles URLs better than aria2c)
+        if wget -q --no-check-certificate -O "$tar_file" "$signed_url"; then
+            download_success=true
+            download_method="wget"
+            echo_info "Successfully downloaded with wget"
+        else
+            echo_info "wget failed, trying with curl..."
+            
+            # Second attempt: Try curl
+            if curl -L -s -o "$tar_file" "$signed_url"; then
+                download_success=true
+                download_method="curl"
+                echo_info "Successfully downloaded with curl"
+            else
+                echo_info "curl failed, trying with aria2c..."
+                
+                # Third attempt: Try aria2c with direct URL
+                if aria2c --file-allocation=none \
+                          --max-connection-per-server=$PARALLEL_CONNECTIONS \
+                          --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
+                          --min-split-size=$MIN_SPLIT_SIZE \
+                          --dir="$(dirname "$tar_file")" \
+                          --out="$(basename "$tar_file")" \
+                          --allow-overwrite=true \
+                          "$signed_url" 2>/dev/null; then
+                    download_success=true
+                    download_method="aria2c_direct"
+                    echo_info "Successfully downloaded with aria2c direct URL"
+                else
+                    echo_info "aria2c direct URL failed, trying with input file..."
+                    
+                    # Fourth attempt: Try aria2c with input file
+                    if aria2c --file-allocation=none \
+                              --max-connection-per-server=$PARALLEL_CONNECTIONS \
+                              --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
+                              --min-split-size=$MIN_SPLIT_SIZE \
+                              --dir="$(dirname "$tar_file")" \
+                              --out="$(basename "$tar_file")" \
+                              --allow-overwrite=true \
+                              --input-file="$url_file" 2>/dev/null; then
+                        download_success=true
+                        download_method="aria2c_input_file"
+                        echo_info "Successfully downloaded with aria2c input file"
+                    fi
+                fi
+            fi
+        fi
+        
+        # Record end time and calculate duration
+        local end_time=$(date +%s.%N)
+        local duration=$(echo "$end_time - $start_time" | bc)
+        
+        if [ "$download_success" = true ]; then
+            # Get file size in bytes for rate calculation
+            local file_size_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo "unknown")
+            local file_size_human=$(get_file_size "$tar_file")
+            local transfer_rate=$(calculate_rate "$file_size_bytes" "$duration")
+            
+            # Log timing information
+            echo_timing "download_${download_method}_$image" "$duration" "$file_size_human" "$transfer_rate"
+            
+            # Add to summary JSON
+            jq --arg img "$image" \
+               --arg obj "$object_name" \
+               --arg method "$download_method" \
+               --arg duration "$duration" \
+               --arg size "$file_size_human" \
+               --arg rate "$transfer_rate" \
+               --argjson connections "$PARALLEL_CONNECTIONS" \
+               --argjson concurrent "$PARALLEL_DOWNLOADS" \
+               '.images += [{"image": $img, "object": $obj, "operation": "download", "method": $method, "duration": $duration, "size": $size, "rate": $rate, "connections": $connections, "concurrent_downloads": $concurrent}]' \
+               "$summary_file" > "$summary_file.tmp" && sudo mv "$summary_file.tmp" "$summary_file"
+            
+            echo_success "Successfully downloaded image: $image using $download_method"
             ((completed++))
         else
-            echo_error "Failed to download image: $image"
+            # Log timing information for failed download
+            echo_timing "download_failed_$image" "$duration" "unknown" "unknown"
+            
+            # Add to summary JSON
+            jq --arg img "$image" \
+               --arg obj "$object_name" \
+               --arg duration "$duration" \
+               --argjson connections "$PARALLEL_CONNECTIONS" \
+               --argjson concurrent "$PARALLEL_DOWNLOADS" \
+               '.images += [{"image": $img, "object": $obj, "operation": "download_failed", "duration": $duration, "size": "unknown", "rate": "unknown", "connections": $connections, "concurrent_downloads": $concurrent}]' \
+               "$summary_file" > "$summary_file.tmp" && sudo mv "$summary_file.tmp" "$summary_file"
+            
+            echo_error "Failed to download image: $image after multiple attempts"
             ((failed++))
         fi
         
@@ -266,6 +412,17 @@ download_images() {
         # Update status file
         update_status "downloading" $completed $total
     done
+    
+    # Add summary statistics to the summary file
+    jq --arg total "$total" \
+       --arg completed "$completed" \
+       --arg failed "$failed" \
+       --arg timestamp "$(date +"%Y-%m-%dT%H:%M:%S%z")" \
+       --arg bucket "$GCS_BUCKET" \
+       '. += {"summary": {"total": $total, "completed": $completed, "failed": $failed, "timestamp": $timestamp, "bucket": $bucket}}' \
+       "$summary_file" > "$summary_file.tmp" && sudo mv "$summary_file.tmp" "$summary_file"
+    
+    echo_info "Timing summary saved to $summary_file"
     
     # Final status update
     if [ $failed -gt 0 ]; then
