@@ -264,7 +264,8 @@ download_images() {
         fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
-        # Get signed URL for the object
+        # Get signed URL for the object and save to a file
+        local url_file="$PRESTAGE_DIR/url_${safe_name}.txt"
         local signed_url=$(get_signed_url "$object_name")
         
         if [ $? -ne 0 ] || [ -z "$signed_url" ]; then
@@ -273,6 +274,9 @@ download_images() {
             continue
         fi
         
+        # Save the clean URL to a file for aria2c (one URL per line)
+        echo "$signed_url" > "$url_file"
+        
         # Record start time
         local start_time=$(date +%s.%N)
         
@@ -280,8 +284,8 @@ download_images() {
         local download_success=false
         local download_method="unknown"
         
-        # First attempt: Try aria2c with direct URL
-        echo_info "Attempting download with aria2c..."
+        # First attempt: Try aria2c with input file
+        echo_info "Attempting download with aria2c using input file..."
         if aria2c --file-allocation=none \
                   --max-connection-per-server=$PARALLEL_CONNECTIONS \
                   --max-concurrent-downloads=$PARALLEL_DOWNLOADS \
@@ -289,7 +293,7 @@ download_images() {
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
                   --allow-overwrite=true \
-                  "$signed_url" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
+                  --input-file="$url_file" 2>"$PRESTAGE_DIR/aria2c_error_${safe_name}.log"; then
             download_success=true
             download_method="aria2c"
             echo_info "Successfully downloaded with aria2c"
@@ -300,7 +304,7 @@ download_images() {
             
             # Second attempt: Try curl as fallback
             echo_info "Trying with curl as fallback..."
-            if curl -L -o "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
+            if curl -L -o "$tar_file" -s --url "$(cat "$url_file")" 2>"$PRESTAGE_DIR/curl_error_${safe_name}.log"; then
                 download_success=true
                 download_method="curl"
                 echo_info "Successfully downloaded with curl fallback"
@@ -311,7 +315,7 @@ download_images() {
                 
                 # Third attempt: Try wget as final fallback
                 echo_info "Trying with wget as final fallback..."
-                if wget --no-check-certificate -O "$tar_file" "$signed_url" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
+                if wget --no-check-certificate -O "$tar_file" -i "$url_file" 2>"$PRESTAGE_DIR/wget_error_${safe_name}.log"; then
                     download_success=true
                     download_method="wget"
                     echo_info "Successfully downloaded with wget fallback"
@@ -322,7 +326,7 @@ download_images() {
                     
                     # Final diagnostic: HTTP HEAD request
                     echo_info "Performing HTTP HEAD request to debug..."
-                    curl -I "$signed_url" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
+                    curl -I "$(cat "$url_file")" > "$PRESTAGE_DIR/curl_head_${safe_name}.log" 2>&1
                     echo_info "HTTP HEAD response saved to $PRESTAGE_DIR/curl_head_${safe_name}.log"
                 fi
             fi
