@@ -172,6 +172,9 @@ get_signed_url() {
         return 1
     fi
     
+    # Clean the URL - remove any newlines, carriage returns, or extra spaces
+    signed_url="${signed_url//[$'\n\r ']}"
+    
     echo "$signed_url"
     return 0
 }
@@ -238,6 +241,10 @@ download_images() {
         
         echo_info "Downloading image: $image using aria2c"
         
+        # Create a temporary file to store the URL
+        local url_file=$(mktemp)
+        echo "$signed_url" > "$url_file"
+        
         # Download the image using aria2c with parallel connections
         if aria2c --file-allocation=none \
                   --max-connection-per-server=$PARALLEL_CONNECTIONS \
@@ -245,13 +252,16 @@ download_images() {
                   --min-split-size=$MIN_SPLIT_SIZE \
                   --dir="$(dirname "$tar_file")" \
                   --out="$(basename "$tar_file")" \
-                  "$signed_url"; then
+                  --input-file="$url_file"; then
             echo_success "Successfully downloaded image: $image"
             ((completed++))
         else
             echo_error "Failed to download image: $image"
             ((failed++))
         fi
+        
+        # Clean up the temporary URL file
+        rm -f "$url_file"
         
         # Update status file
         update_status "downloading" $completed $total
