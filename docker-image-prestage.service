@@ -1,0 +1,18 @@
+[Unit]
+Description=Docker Image Prestaging Service
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/systemd/docker-image-prestage.env
+ExecStart=/opt/instance-bootstrap/image-prestage.sh ${INST_USER} ${IMAGE_LIST_JSON} ${GCS_BUCKET}
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+TimeoutStartSec=0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

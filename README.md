@@ -4,7 +4,10 @@
 ## Bootstrapping Example
 
 ```bash
-curl -sSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/main/oneshot.sh | bash -s -- ubuntu 535 "aws_timestream_access_key='test_key' aws_timestream_secret_key='test_secret' aws_timestream_database='test_db' aws_timestream_region='test_region' environmentID='test_envid'"
+
+BRANCH=feat-docker-prestage
+curl -sSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/project-gnr8/instance-bootstrap/refs/heads/${BRANCH}/oneshot.sh | bash -s -- ubuntu 535 "aws_timestream_access_key='test_key' aws_timestream_secret_key='test_secret' aws_timestream_database='test_db' aws_timestream_region='test_region' environmentID='test_envid'" '["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]' 'brev-image-prestage' ${BRANCH}
+
 ```
 
 ## Resource Cleanup
