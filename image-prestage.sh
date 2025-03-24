@@ -118,7 +118,7 @@ parse_image_list() {
     echo_info "Found $total_images images to process"
     
     # Update status file
-    echo "{\"status\":\"downloading\",\"completed\":0,\"total\":$total_images,\"images\":$IMAGE_LIST_JSON}" | sudo tee "$STATUS_FILE" > /dev/null
+    update_status "downloading" 0 $total_images
 }
 
 # Update status file
@@ -126,7 +126,20 @@ update_status() {
     local status=$1
     local completed=$2
     local total=$3
-    echo "{\"status\":\"$status\",\"completed\":$completed,\"total\":$total,\"images\":$(jq '.images' "$STATUS_FILE")}" | sudo tee "$STATUS_FILE" > /dev/null
+    
+    # Use jq to properly update the status file with valid JSON
+    if ! jq -n \
+        --arg status "$status" \
+        --argjson completed "$completed" \
+        --argjson total "$total" \
+        --argjson images "$(jq '.images' "$STATUS_FILE" 2>/dev/null || echo '[]')" \
+        '{status: $status, completed: $completed, total: $total, images: $images}' > "$STATUS_FILE.tmp"; then
+        echo_error "Failed to update status file" >&2
+        return 1
+    fi
+    
+    sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+    return 0
 }
 
 # Get signed URL from GCS signed URL service
@@ -171,11 +184,11 @@ get_object_name() {
     # Check if image exists in the mapping
     if [[ -n "${IMAGE_TO_OBJECT_MAP[$image]:-}" ]]; then
         object_name="${IMAGE_TO_OBJECT_MAP[$image]}"
-        echo_info "Using mapped object name for $image: $object_name"
+        echo_info "Using mapped object name for $image: $object_name" >&2
     else
         # Fallback to the default naming convention if not in the mapping
         object_name=$(echo "$image" | tr '/:' '_-').tar
-        echo_info "No mapping found for $image, using default name: $object_name"
+        echo_info "No mapping found for $image, using default name: $object_name" >&2
     fi
     
     echo "$object_name"
@@ -205,8 +218,12 @@ download_images() {
         
         echo_info "Processing image: $image (object: $object_name)"
         
-        # Add image to status file
-        jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" | sudo tee "$STATUS_FILE.tmp" > /dev/null
+        # Add image to status file - ensure proper JSON formatting
+        if ! jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" > "$STATUS_FILE.tmp"; then
+            echo_error "Failed to update status file with image: $image"
+            ((failed++))
+            continue
+        fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
         
         # Get signed URL for the object
