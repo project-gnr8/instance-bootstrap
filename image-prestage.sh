@@ -167,25 +167,32 @@ update_status() {
     
     echo_info "Updating status file: status=$status, completed=$completed, total=$total"
     
-    # Use jq to properly update the status file with valid JSON
-    if ! jq -n \
-        --arg status "$status" \
-        --argjson completed "$completed" \
-        --argjson total "$total" \
-        --argjson images "$(jq '.images' "$STATUS_FILE" 2>/dev/null || echo '[]')" \
-        '{status: $status, completed: $completed, total: $total, images: $images}' > "$STATUS_FILE.tmp"; then
-        echo_error "Failed to update status file"
-        return 1
-    fi
+    # Create JSON content directly
+    local json_content=$(cat <<EOF
+{
+  "status": "$status",
+  "completed": $completed,
+  "total": $total,
+  "images": $(jq '.images' "$STATUS_FILE" 2>/dev/null || echo '[]')
+}
+EOF
+)
     
-    # Ensure proper permissions and ownership
-    sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+    # Write directly to file with sudo
+    echo "$json_content" | sudo tee "$STATUS_FILE" > /dev/null
+    
+    # Ensure proper permissions
     sudo chmod 644 "$STATUS_FILE"
     sudo chown "$INST_USER":"$INST_USER" "$STATUS_FILE"
     
-    # Verify the update
-    echo_info "Status file updated: $(cat "$STATUS_FILE" | jq -c .)"
-    return 0
+    # Verify the update worked
+    if [ $? -eq 0 ]; then
+        echo_info "Status file updated successfully"
+        return 0
+    else
+        echo_error "Failed to update status file"
+        return 1
+    fi
 }
 
 # Get signed URL from GCS signed URL service
