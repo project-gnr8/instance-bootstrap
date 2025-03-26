@@ -7,7 +7,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/systemd/docker-image-prestage.env
-ExecStart=/bin/bash -c 'echo "Starting Docker image prestaging at $(date)" && /opt/instance-bootstrap/image-prestage.sh ${INST_USER} "${IMAGE_LIST_JSON}" ${GCS_BUCKET}'
+ExecStart=/bin/bash -c 'echo "Starting Docker image prestaging at $(date)" && /opt/instance-bootstrap/image-prestage.sh ${INST_USER} ${IMAGE_LIST_JSON} ${GCS_BUCKET}'
 StandardOutput=journal+console
 StandardError=journal+console
 KillMode=process

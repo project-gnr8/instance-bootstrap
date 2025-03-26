@@ -6,7 +6,10 @@ set -euo pipefail
 # Parse command line arguments
 INST_USER=$1
 IMAGE_LIST_JSON=$2
-GCS_BUCKET=${3:-"brev-image-prestage"}
+# Ensure GCS_BUCKET is always set, even if passed as empty
+GCS_BUCKET=${3:+"$3"}
+# If GCS_BUCKET is still empty after the above, set the default
+GCS_BUCKET=${GCS_BUCKET:-"brev-image-prestage"}
 
 # Define constants and paths
 PRESTAGE_DIR="/opt/prestage/docker-images"
@@ -151,12 +154,26 @@ parse_image_list() {
         IMAGE_LIST_JSON='["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]'
     fi
     
+    # Ensure IMAGE_LIST_JSON is valid JSON by removing any extra quotes
+    # This handles cases where the variable might be double-quoted from the environment file
+    IMAGE_LIST_JSON=$(echo "$IMAGE_LIST_JSON" | sed 's/^'"'"'\(.*\)'"'"'$/\1/')
+    
+    # Log the JSON for debugging
+    echo_info "Processing image list: $IMAGE_LIST_JSON"
+    
+    # Validate JSON format before processing
+    if ! echo "$IMAGE_LIST_JSON" | jq empty 2>/dev/null; then
+        echo_error "Invalid JSON format in IMAGE_LIST_JSON: $IMAGE_LIST_JSON"
+        echo_error "Using default image list instead"
+        IMAGE_LIST_JSON='["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]'
+    fi
+    
     # Count total images
-    local total_images=$(echo "$IMAGE_LIST_JSON" | jq '. | length')
-    echo_info "Found $total_images images to process"
+    local total=$(echo "$IMAGE_LIST_JSON" | jq '. | length')
+    echo_info "Found $total images to process"
     
     # Update status file
-    update_status "downloading" 0 $total_images
+    update_status "downloading" 0 $total
 }
 
 # Update status file
@@ -244,9 +261,23 @@ get_signed_url() {
 download_images() {
     echo_info "Starting Docker image downloads using signed URLs"
     
-    # Parse image list from JSON
-    local images=$(echo "$IMAGE_LIST_JSON" | jq -r '.[]')
-    local total=$(echo "$IMAGE_LIST_JSON" | jq -r '. | length')
+    # Parse image list from JSON - with better error handling
+    local images
+    local total
+    
+    # Try to parse the image list, with fallback for errors
+    if ! images=$(echo "$IMAGE_LIST_JSON" | jq -r '.[]' 2>/dev/null); then
+        echo_error "Failed to parse image list JSON. Using default image."
+        images="nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"
+        total=1
+    else
+        # Count total images
+        if ! total=$(echo "$IMAGE_LIST_JSON" | jq -r '. | length' 2>/dev/null); then
+            echo_error "Failed to count images in JSON. Assuming 1 image."
+            total=1
+        fi
+    fi
+    
     local completed=0
     local failed=0
     

@@ -24,10 +24,14 @@ IMAGE_LIST_JSON='["nvcr.io/nvidia/rapidsai/notebooks:24.12-cuda12.5-py3.12"]'
 # Stop and disable services
 sudo systemctl stop instance-oneshot.service workbench-install.service
 sudo systemctl disable instance-oneshot.service workbench-install.service
+sudo systemctl stop docker-image-prestage.service
+sudo systemctl disable docker-image-prestage.service
+
 
 # Remove service files
 sudo rm -f /etc/systemd/system/instance-oneshot.service
 sudo rm -f /etc/systemd/system/workbench-install.service
+sudo rm -f /etc/systemd/system/docker-image-prestage.service
 
 # Remove installed scripts
 sudo rm -f /opt/startup.sh

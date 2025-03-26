@@ -293,8 +293,12 @@ setup_prestage_service() {
     # Create environment file with variables
     echo_info "Creating environment file for prestaging service"
     echo "INST_USER=${INST_USER}" | sudo tee "$PRESTAGE_ENV_FILE" > /dev/null
-    # Ensure JSON is properly quoted in the environment file
-    echo "IMAGE_LIST_JSON='${IMAGE_LIST_JSON}'" | sudo tee -a "$PRESTAGE_ENV_FILE" > /dev/null
+    
+    # Handle JSON properly - strip any outer quotes first, then add them consistently
+    # This prevents double-quoting issues when the variable is expanded in the service
+    local cleaned_json=$(echo "$IMAGE_LIST_JSON" | sed "s/^'\\(.*\\)'$/\\1/")
+    echo "IMAGE_LIST_JSON='${cleaned_json}'" | sudo tee -a "$PRESTAGE_ENV_FILE" > /dev/null
+    
     echo "GCS_BUCKET=${GCS_BUCKET}" | sudo tee -a "$PRESTAGE_ENV_FILE" > /dev/null
     sudo chmod 600 "$PRESTAGE_ENV_FILE"
     
