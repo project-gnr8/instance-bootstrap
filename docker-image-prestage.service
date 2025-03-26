@@ -1,19 +1,25 @@
 [Unit]
 Description=Docker Image Prestaging Service
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
+After=docker.service network-online.target
+Requires=docker.service network-online.target
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/systemd/docker-image-prestage.env
+WorkingDirectory=/opt/instance-bootstrap
+# Use bash -c with set -e removed to prevent premature exits
 ExecStart=/bin/bash -c 'echo "Starting Docker image prestaging at $(date)" && /opt/instance-bootstrap/image-prestage.sh ${INST_USER} ${IMAGE_LIST_JSON} ${GCS_BUCKET}'
+# Increase timeout to allow for long downloads
+TimeoutStartSec=3600
+# Ensure proper permissions for the prestage directory
+ExecStartPre=/bin/bash -c 'mkdir -p /opt/prestage/docker-images && chown -R ${INST_USER}:${INST_USER} /opt/prestage'
+# Ensure the script is executable
+ExecStartPre=/bin/bash -c 'chmod +x /opt/instance-bootstrap/image-prestage.sh'
+# Don't restart on failure
+Restart=no
+# Send output to both journal and console
 StandardOutput=journal+console
 StandardError=journal+console
-KillMode=process
-TimeoutStartSec=3600
-RemainAfterExit=yes
-WorkingDirectory=/opt/instance-bootstrap
 
 [Install]
 WantedBy=multi-user.target

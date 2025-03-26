@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Enable debug mode to see what's happening
-set -x
+# set -x
 
 # Define variables
 INST_USER=$1
@@ -292,6 +292,10 @@ setup_prestage_service() {
     
     # Create environment file with variables
     echo_info "Creating environment file for prestaging service"
+    
+    # Create directory for environment file if it doesn't exist
+    sudo mkdir -p "$(dirname "$PRESTAGE_ENV_FILE")"
+    
     echo "INST_USER=${INST_USER}" | sudo tee "$PRESTAGE_ENV_FILE" > /dev/null
     
     # Handle JSON properly - strip any outer quotes first, then add them consistently
@@ -302,72 +306,64 @@ setup_prestage_service() {
     echo "GCS_BUCKET=${GCS_BUCKET}" | sudo tee -a "$PRESTAGE_ENV_FILE" > /dev/null
     sudo chmod 600 "$PRESTAGE_ENV_FILE"
     
-    # Verify environment file was created correctly
+    # Verify environment file was created
     if [ ! -f "$PRESTAGE_ENV_FILE" ]; then
         echo_error "Failed to create environment file: $PRESTAGE_ENV_FILE"
         return 1
     fi
     
-    # Log environment file contents (without sensitive data)
-    echo_info "Environment file created with INST_USER=${INST_USER} and GCS_BUCKET=${GCS_BUCKET}"
+    # Create prestage directory with proper permissions
+    echo_info "Creating prestage directory"
+    sudo mkdir -p "$PRESTAGE_DIR"
+    sudo chown -R "$INST_USER":"$INST_USER" "$PRESTAGE_DIR"
     
-    # Create prestage directory if it doesn't exist
-    local prestage_dir="/opt/prestage"
-    if [ ! -d "$prestage_dir" ]; then
-        echo_info "Creating prestage directory: $prestage_dir"
-        sudo mkdir -p "$prestage_dir"
-        sudo chmod 775 "$prestage_dir"
-        sudo chown "$INST_USER":"$INST_USER" "$prestage_dir"
-    fi
+    # Copy systemd service file
+    echo_info "Installing systemd service file"
+    sudo cp "$PRESTAGE_SERVICE_FILE" "/etc/systemd/system/${PRESTAGE_SERVICE_NAME}.service"
     
-    # Create Docker images directory if it doesn't exist
-    local docker_images_dir="$prestage_dir/docker-images"
-    if [ ! -d "$docker_images_dir" ]; then
-        echo_info "Creating Docker images directory: $docker_images_dir"
-        sudo mkdir -p "$docker_images_dir"
-        sudo chmod 775 "$docker_images_dir"
-        sudo chown "$INST_USER":"$INST_USER" "$docker_images_dir"
-    fi
-    
-    # Copy service file if it exists in the scripts directory
-    if [ -f "$SCRIPTS_DIR/docker-image-prestage.service" ]; then
-        echo_info "Copying prestage service file"
-        sudo cp "$SCRIPTS_DIR/docker-image-prestage.service" "$PRESTAGE_SERVICE_FILE"
-    fi
-    
-    # Check if service file exists
-    if [ ! -f "$PRESTAGE_SERVICE_FILE" ]; then
-        echo_error "Missing service file for image prestaging. Skipping service setup."
-        return 1
-    fi
-    
-    # Reload systemd, enable and start the service
-    echo_info "Reloading systemd configuration"
+    # Reload systemd to pick up the new service
+    echo_info "Reloading systemd daemon"
     sudo systemctl daemon-reload
     
-    # Enable but don't start the service yet
-    echo_info "Enabling $PRESTAGE_SERVICE_NAME service"
-    sudo systemctl enable "$PRESTAGE_SERVICE_NAME"
+    # Enable and start the service
+    echo_info "Enabling and starting prestage service"
+    sudo systemctl enable "$PRESTAGE_SERVICE_NAME.service"
     
-    # Verify service is enabled
-    if ! systemctl is-enabled "$PRESTAGE_SERVICE_NAME" &>/dev/null; then
-        echo_error "Failed to enable $PRESTAGE_SERVICE_NAME service"
+    # Start the service in the background
+    sudo systemctl start "$PRESTAGE_SERVICE_NAME.service" &
+    
+    # Give the service a moment to start
+    sleep 2
+    
+    # Check if the service is enabled first
+    if ! sudo systemctl is-enabled --quiet "$PRESTAGE_SERVICE_NAME.service"; then
+        echo_error "Failed to enable docker-image-prestage service"
         return 1
     fi
     
-    # Start the service in a completely non-blocking way
-    echo_info "Starting $PRESTAGE_SERVICE_NAME service in background"
-    sudo systemctl start "$PRESTAGE_SERVICE_NAME" &
+    # Check service status - don't fail on non-zero exit code
+    service_status=$(sudo systemctl status "$PRESTAGE_SERVICE_NAME.service" 2>&1 || true)
     
-    # Check if service started successfully (non-blocking)
-    (
-        sleep 2
-        if systemctl is-active "$PRESTAGE_SERVICE_NAME" &>/dev/null; then
-            echo_info "$PRESTAGE_SERVICE_NAME service started successfully"
-        else
-            echo_error "$PRESTAGE_SERVICE_NAME service failed to start. Check logs with: journalctl -u $PRESTAGE_SERVICE_NAME"
-        fi
-    ) &
+    # Check for common success indicators in the status output
+    if echo "$service_status" | grep -q "Active: active"; then
+        echo_success "Docker image prestaging service is active and running"
+    elif echo "$service_status" | grep -q "starting Docker image prestaging"; then
+        echo_success "Docker image prestaging service has started successfully"
+    elif echo "$service_status" | grep -q "Starting Docker Image Prestaging"; then
+        echo_success "Docker image prestaging service is starting"
+    else
+        # Service might have failed, but we'll continue anyway and just log a warning
+        echo_info "Docker image prestaging service status is unclear. This is normal for long-running tasks."
+        echo_info "You can check the status with: journalctl -u $PRESTAGE_SERVICE_NAME"
+    fi
+    
+    # Create a status file to track download progress if it doesn't exist
+    echo_info "Ensuring status file exists"
+    local status_file="$PRESTAGE_DIR/docker-images-prestage-status.json"
+    if [ ! -f "$status_file" ]; then
+        echo '{"status":"pending","completed":0,"total":0,"images":[]}' | sudo tee "$status_file" > /dev/null
+        sudo chown "$INST_USER":"$INST_USER" "$status_file"
+    fi
     
     echo_info "Docker image prestaging service setup completed"
     return 0

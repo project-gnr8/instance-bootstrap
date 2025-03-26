@@ -19,6 +19,46 @@ SIGNED_URL_SERVICE="https://gcs-signed-url-service-145097832422.us-central1.run.
 user_home=$(eval echo ~$INST_USER)
 LOG_FILE=${LOG_FILE:-"$user_home/.verb-setup.log"}
 
+# Track download status
+DOWNLOAD_COMPLETED=0
+DOWNLOAD_TOTAL=0
+DOWNLOAD_FAILED=0
+
+# Set up trap to ensure status file is updated on exit
+cleanup() {
+    local exit_code=$?
+    echo_info "Script exiting with code $exit_code"
+    
+    # Only update status if we've started downloading
+    if [ -f "$STATUS_FILE" ]; then
+        if [ $DOWNLOAD_COMPLETED -eq $DOWNLOAD_TOTAL ]; then
+            # All downloads completed successfully
+            echo_info "All downloads completed successfully, updating final status"
+            update_status "completed" $DOWNLOAD_COMPLETED $DOWNLOAD_TOTAL
+            exit 0
+        elif [ $DOWNLOAD_COMPLETED -gt 0 ]; then
+            # Some downloads completed
+            echo_info "Some downloads completed, updating final status"
+            update_status "completed_with_errors" $DOWNLOAD_COMPLETED $DOWNLOAD_TOTAL
+            # Exit with success if at least one image was downloaded
+            exit 0
+        else
+            # No downloads completed
+            echo_info "No downloads completed, updating final status"
+            update_status "failed" 0 $DOWNLOAD_TOTAL
+            exit 1
+        fi
+    fi
+    
+    # If we get here, use the original exit code
+    echo_info "Cleanup complete"
+    exit $exit_code
+}
+
+# Register trap for normal exit and signals
+trap cleanup EXIT
+trap 'trap - EXIT; cleanup' INT TERM
+
 # Configure parallel downloads
 # Use more threads for faster downloads
 PARALLEL_CONNECTIONS=16
@@ -278,6 +318,9 @@ download_images() {
         fi
     fi
     
+    # Update global tracking variables
+    DOWNLOAD_TOTAL=$total
+    
     local completed=0
     local failed=0
     
@@ -304,6 +347,7 @@ download_images() {
         if ! jq --arg img "$image" '.images += [$img]' "$STATUS_FILE" > "$STATUS_FILE.tmp"; then
             echo_error "Failed to update status file with image: $image"
             ((failed++))
+            ((DOWNLOAD_FAILED++))
             continue
         fi
         sudo mv "$STATUS_FILE.tmp" "$STATUS_FILE"
@@ -317,6 +361,7 @@ download_images() {
         if [ $url_status -ne 0 ] || [ -z "$signed_url" ]; then
             echo_error "Failed to get signed URL for image: $image (object: $object_name)"
             ((failed++))
+            ((DOWNLOAD_FAILED++))
             continue
         fi
         
@@ -401,12 +446,14 @@ download_images() {
             
             echo_success "Successfully downloaded image: $image"
             ((completed++))
+            ((DOWNLOAD_COMPLETED++))
             
             # Update status file with completed count
             update_status "downloading" $completed $total
         else
             echo_error "Failed to download image: $image after all attempts"
             ((failed++))
+            ((DOWNLOAD_FAILED++))
             
             # Update status file with completed count
             update_status "downloading" $completed $total
@@ -424,24 +471,24 @@ download_images() {
     
     echo_info "Timing summary saved to $summary_file"
     
-    # Final status update - CRITICAL: This must happen outside the loop
+    # Final status update - this will be overridden by the trap handler if needed
     if [ $failed -gt 0 ]; then
         if [ $completed -gt 0 ]; then
             # Some succeeded, some failed
             echo_info "Setting final status to completed_with_errors ($completed succeeded, $failed failed)"
             update_status "completed_with_errors" $completed $total
+            # Always exit with success if at least some downloads succeeded
+            return 0
         else
             # All failed
             echo_info "Setting final status to failed (all $failed failed)"
             update_status "failed" $completed $total
+            return 1
         fi
-        echo_error "$failed out of $total downloads failed"
-        return 1
     else
         # All succeeded
         echo_info "Setting final status to completed (all $total succeeded)"
         update_status "completed" $completed $total
-        echo_success "All $total images downloaded successfully"
         return 0
     fi
 }

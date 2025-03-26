@@ -38,6 +38,9 @@ sudo rm -f /opt/startup.sh
 sudo rm -f $HOME/.nvwb/install.sh
 sudo rm -rf $HOME/.nvwb/*
 
+# Remove prestaging files
+sudo rm -rf /opt/prestage
+
 # Clear journal logs
 sudo journalctl --rotate
 sudo journalctl --vacuum-time=1s
