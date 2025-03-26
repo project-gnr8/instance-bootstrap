@@ -373,26 +373,12 @@ download_images() {
             
             # Update status file with completed count
             update_status "downloading" $completed $total
-            
-            # If all downloads are complete, update status to completed or completed_with_errors
-            if [ $completed -eq $total ]; then
-                if [ $failed -gt 0 ]; then
-                    update_status "completed_with_errors" $completed $total
-                else
-                    update_status "completed" $completed $total
-                fi
-            fi
         else
             echo_error "Failed to download image: $image after all attempts"
             ((failed++))
             
             # Update status file with completed count
             update_status "downloading" $completed $total
-            
-            # If all downloads are attempted, update status to completed_with_errors
-            if [ $((completed + failed)) -eq $total ]; then
-                update_status "completed_with_errors" $completed $total
-            fi
         fi
     done
     
@@ -407,12 +393,22 @@ download_images() {
     
     echo_info "Timing summary saved to $summary_file"
     
-    # Final status update
+    # Final status update - CRITICAL: This must happen outside the loop
     if [ $failed -gt 0 ]; then
-        update_status "completed_with_errors" $completed $total
+        if [ $completed -gt 0 ]; then
+            # Some succeeded, some failed
+            echo_info "Setting final status to completed_with_errors ($completed succeeded, $failed failed)"
+            update_status "completed_with_errors" $completed $total
+        else
+            # All failed
+            echo_info "Setting final status to failed (all $failed failed)"
+            update_status "failed" $completed $total
+        fi
         echo_error "$failed out of $total downloads failed"
         return 1
     else
+        # All succeeded
+        echo_info "Setting final status to completed (all $total succeeded)"
         update_status "completed" $completed $total
         echo_success "All $total images downloaded successfully"
         return 0
