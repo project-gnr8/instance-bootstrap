@@ -319,7 +319,19 @@ setup_prestage_service() {
     
     # Copy systemd service file
     echo_info "Installing systemd service file"
-    sudo cp "$PRESTAGE_SERVICE_FILE" "/etc/systemd/system/${PRESTAGE_SERVICE_NAME}.service"
+    if [ ! -f "$SCRIPTS_DIR/docker-image-prestage.service" ]; then
+        echo_error "Service file not found: $SCRIPTS_DIR/docker-image-prestage.service"
+        return 1
+    fi
+    
+    # Copy from the current directory
+    sudo cp "$SCRIPTS_DIR/docker-image-prestage.service" "/etc/systemd/system/${PRESTAGE_SERVICE_NAME}.service"
+    
+    # Verify the service file was copied successfully
+    if [ ! -f "/etc/systemd/system/${PRESTAGE_SERVICE_NAME}.service" ]; then
+        echo_error "Failed to copy service file to /etc/systemd/system/"
+        return 1
+    fi
     
     # Reload systemd to pick up the new service
     echo_info "Reloading systemd daemon"

@@ -37,6 +37,7 @@ sudo rm -f /etc/systemd/system/docker-image-prestage.service
 sudo rm -f /opt/startup.sh
 sudo rm -f $HOME/.nvwb/install.sh
 sudo rm -rf $HOME/.nvwb/*
+sudo rm -rf /opt/instance-bootstrap
 
 # Remove prestaging files
 sudo rm -rf /opt/prestage
