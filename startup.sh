@@ -140,7 +140,8 @@ install_metrics() {
     
     # The metrics script expects individual space-separated arguments
     # We need to pass them directly to bash -s without any array processing
-    curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | \
+    # curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/main/setup.sh | \
+    curl -sSL https://raw.githubusercontent.com/Shiftius/ansible-gpu-metrics-collector/feat-telegraf-procstat/setup.sh | \
         bash -s -- $INST_METRICS_VARS
     
     echo_info "Metrics setup completed"
